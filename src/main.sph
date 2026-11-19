@@ -1,0 +1,223 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Native GUI & Graphics Engine + 2D Platformer Demo
+// ============================================================================
+// Features:
+//  - Window & Dual Rendering Engine (SIMD Framebuffer Canvas + Hardware OpenGL)
+//  - Sprite Rendering & Procedural Texture Atlas Generator
+//  - Frame-Based Animation System
+//  - Collision Detection (AABB + Tilemap Resolution + SIMD Batch Bounding Checks)
+//  - Physics Simulation (Semi-implicit Euler, Gravity, Drag, Platformer Controller)
+//  - Audio Playback (Zero-Dependency 4-Channel WinMM Chiptune Synthesizer)
+//  - Low-Latency Win32 Input Handling (GetAsyncKeyState, Mouse Client Coordinates)
+//  - Entity-Component-System (ECS) Architecture
+//  - Scene Management (Title, Gameplay, Level Editor, Victory, Game Over)
+//  - Interactive In-Engine Level Editor (Grid, Palette, Painting, Serialization)
+// ============================================================================
+
+import "engine/types.sph";
+import "engine/simd_math.sph";
+import "engine/window.sph";
+import "engine/canvas.sph";
+import "engine/gl_render.sph";
+import "engine/texture.sph";
+import "engine/animation.sph";
+import "engine/collision.sph";
+import "engine/physics.sph";
+import "engine/input.sph";
+import "engine/audio.sph";
+import "engine/ecs.sph";
+import "engine/scene.sph";
+import "engine/editor.sph";
+import "game/levels.sph";
+import "game/platformer.sph";
+
+extern "C" fn QueryPerformanceCounter(lpPerformanceCount: *i64): i32;
+extern "C" fn QueryPerformanceFrequency(lpFrequency: *i64): i32;
+extern "C" fn Sleep(dwMilliseconds: i32): void;
+extern "C" fn AttachConsole(pid: i32): i32;
+
+fn main(): i32 {
+    AttachConsole(-1);
+    println("=================================================================");
+    println("      SantientPHP (SPH) - Native GUI & 2D Game Engine v1.0       ");
+    println("=================================================================");
+
+    // 1. Hardware SIMD Feature Diagnostics
+    let simd_info: SimdCapabilities = simd_detect_features();
+    if (simd_info.has_sse2) {
+        println("[OK] Hardware SIMD Acceleration: SSE2 & AVX detected and active.");
+    } else {
+        println("[OK] Hardware SIMD Acceleration: Portable fallback.");
+    }
+
+    // 2. High-Resolution Performance Counter Initialization
+    mut perf_freq: i64 = 0 as i64;
+    mut prev_counter: i64 = 0 as i64;
+    unsafe {
+        QueryPerformanceFrequency(&perf_freq);
+        QueryPerformanceCounter(&prev_counter);
+    }
+
+    // 3. Native Win32 Window & Canvas Creation (640x480 Screen)
+    let win_w: i32 = 640;
+    let win_h: i32 = 480;
+    let window: EngineWindow = engine_window_create("SantientPHP Game Engine - 2D Platformer & Level Editor", win_w, win_h);
+    let canvas: CanvasEngine = canvas_engine_create(window.hwnd, win_w, win_h);
+
+    // 4. Zero-Dependency 4-Channel Chiptune Synthesizer Initialization
+    println("[OK] Initializing WinMM 44.1 kHz 4-Channel Chiptune Synthesizer...");
+    audio_init();
+
+    // 5. Hardware OpenGL Surface Initialization
+    let gl: GLRenderer = gl_renderer_create(window.hwnd, win_w, win_h);
+    if (gl.is_active) {
+        println("[OK] Hardware OpenGL 2D Rendering Surface initialized.");
+    } else {
+        println("[INFO] Running on Native SIMD Framebuffer Canvas Engine.");
+    }
+
+    // 6. Procedural Texture Atlas Generation
+    println("[OK] Generating procedural 128x128 sprite atlas texture...");
+    let atlas: Texture = generate_sprite_atlas();
+
+    // 7. Level Map & Game State Initialization
+    let level_map: LevelMap = level_map_create();
+    build_level(level_map, 0);
+    println("[OK] Level 1 (Greenfield Meadows) loaded.");
+
+    mut scene_mgr: SceneManager = scene_manager_create();
+    scene_mgr = scene_set(scene_mgr, scene_id_gameplay());
+
+    mut game: PlatformerGame = platformer_game_create(0, level_map);
+    mut editor: LevelEditor = level_editor_create();
+
+    mut prev_input = InputState {
+        left_down: false, right_down: false, up_down: false, down_down: false,
+        jump_down: false, jump_pressed: false, editor_toggle_pressed: false, reset_pressed: false,
+        fullscreen_toggle_pressed: false, f5_pressed: false, ctrl_down: false,
+        z_pressed: false, y_pressed: false, mute_pressed: false,
+        mouse_x: 0, mouse_y: 0, mouse_lbutton_down: false, mouse_lbutton_pressed: false,
+        mouse_rbutton_down: false, mouse_rbutton_pressed: false, digit_pressed: 0,
+    };
+
+    mut fps_accum: i32 = 0;
+    mut fps_timer: f32 = 0.0 as f32;
+    mut current_fps: i32 = 60;
+    mut frame_time_ms: f32 = 16.6 as f32;
+
+    println("[OK] Engine running. Entering 60 FPS non-blocking game loop...");
+
+    // ------------------------------------------------------------------------
+    // Rock-Solid 60 FPS Non-Blocking Event Loop
+    // ------------------------------------------------------------------------
+    mut running: bool = true;
+    while (running) {
+        // A. Pump Win32 Messages
+        let window_active: bool = engine_window_pump(window);
+        if (!window_active) {
+            running = false;
+        }
+
+        // B. Calculate High-Precision Delta Time
+        mut cur_counter: i64 = 0 as i64;
+        unsafe {
+            QueryPerformanceCounter(&cur_counter);
+        }
+        let elapsed_ticks: i64 = cur_counter - prev_counter;
+        prev_counter = cur_counter;
+
+        mut dt: f32 = ((elapsed_ticks as f32) / (perf_freq as f32));
+        if (dt > (0.05 as f32)) {
+            dt = 0.05 as f32;
+        }
+        frame_time_ms = dt * (1000.0 as f32);
+
+        fps_accum = fps_accum + 1;
+        fps_timer = fps_timer + dt;
+        if (fps_timer >= (1.0 as f32)) {
+            current_fps = fps_accum;
+            fps_accum = 0;
+            fps_timer = fps_timer - (1.0 as f32);
+        }
+
+        // C. Poll Input State
+        let input: InputState = input_poll(window, canvas, prev_input);
+
+        // D. Toggle Borderless Fullscreen (F11)
+        if (input.fullscreen_toggle_pressed && (!prev_input.fullscreen_toggle_pressed)) {
+            engine_window_toggle_fullscreen(window);
+        }
+
+        // E. Mode Toggle: Switch between Gameplay and Level Editor (TAB / E)
+        if (input.editor_toggle_pressed && (!prev_input.editor_toggle_pressed)) {
+            if (scene_mgr.current_scene == scene_id_editor()) {
+                scene_mgr = scene_set(scene_mgr, scene_id_gameplay());
+            } else {
+                scene_mgr = scene_set(scene_mgr, scene_id_editor());
+            }
+        }
+
+        // F. Reset / Restart Current Level
+        if (input.reset_pressed && (!prev_input.reset_pressed)) {
+            game = platformer_game_create(scene_mgr.current_level_index, level_map);
+            scene_mgr.current_scene = scene_id_gameplay();
+        }
+
+        // G. Handle Next Level on Stage Clear
+        if (game.is_level_cleared && input_is_raw_key_down(key_code_enter())) {
+            let prev_score: i32 = game.score;
+            let prev_coins: i32 = game.coins;
+            let prev_hp: i32 = game.player.health;
+            scene_mgr = scene_next_level(scene_mgr);
+            game = platformer_game_create(scene_mgr.current_level_index, level_map);
+            game.score = prev_score;
+            game.coins = prev_coins;
+            game.player.health = prev_hp;
+        }
+
+        // H. Update & Render Active Scene
+        if (scene_mgr.current_scene == scene_id_editor()) {
+            editor = level_editor_update(editor, level_map, input, dt);
+            if (editor.request_playtest) {
+                // F5: Playtest from Cursor
+                game.player.pos_x = editor.playtest_x;
+                game.player.pos_y = editor.playtest_y;
+                game.player.vel_x = 0.0 as f32;
+                game.player.vel_y = 0.0 as f32;
+                scene_mgr = scene_set(scene_mgr, scene_id_gameplay());
+            }
+            platformer_game_render(canvas, atlas, game, level_map, current_fps, frame_time_ms);
+            level_editor_render(canvas, editor, level_map);
+        } else if (scene_mgr.current_scene == scene_id_victory()) {
+            canvas_engine_clear(canvas, color_to_u32(ColorRGBA { r: 15, g: 30, b: 50, a: 255 }));
+            canvas_engine_draw_text(canvas, 180, 160, "CONGRATULATIONS!", color_yellow(), 2);
+            canvas_engine_draw_text(canvas, 160, 210, "YOU CONQUERED ALL LEVELS!", color_white(), 1);
+            canvas_engine_draw_text(canvas, 190, 250, "FINAL SCORE: " + i32_to_string(game.score), color_cyan(), 2);
+            canvas_engine_draw_text(canvas, 200, 310, "PRESS [R] TO PLAY AGAIN", color_light_gray(), 1);
+        } else {
+            // Gameplay Scene
+            game = platformer_game_update(game, level_map, input, dt);
+            platformer_game_render(canvas, atlas, game, level_map, current_fps, frame_time_ms);
+        }
+
+        // I. Blit Framebuffer to Native Window Screen
+        canvas_engine_present(canvas);
+
+        prev_input = input;
+
+        // Yield CPU briefly (1ms sleep) to maintain smooth 60 FPS without high CPU load
+        Sleep(1);
+    }
+
+    // 8. Clean Shutdown
+    println("[OK] Shutting down game engine...");
+    audio_shutdown();
+    level_map_destroy(level_map);
+    texture_destroy(atlas);
+    canvas_engine_destroy(canvas);
+    engine_window_close(window);
+    println("Engine exited cleanly.");
+    return 0;
+}

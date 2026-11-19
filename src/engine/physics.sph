@@ -1,0 +1,106 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Kinematics, Platformer Physics & Particle System
+// Tests: Semi-implicit Euler Integration, SIMD Acceleration, Value Structs
+// ============================================================================
+
+import "types.sph";
+import "simd_math.sph";
+
+struct PhysicsBody {
+    pos_x: f32,
+    pos_y: f32,
+    vel_x: f32,
+    vel_y: f32,
+    width: f32,
+    height: f32,
+    is_grounded: bool,
+    was_grounded: bool,
+    gravity_scale: f32,
+}
+
+fn physics_body_create(x: f32, y: f32, w: f32, h: f32): PhysicsBody {
+    return PhysicsBody {
+        pos_x: x,
+        pos_y: y,
+        vel_x: 0.0 as f32,
+        vel_y: 0.0 as f32,
+        width: w,
+        height: h,
+        is_grounded: false,
+        was_grounded: false,
+        gravity_scale: 1.0 as f32,
+    };
+}
+
+// ----------------------------------------------------------------------------
+// High-Performance Particle Engine
+// ----------------------------------------------------------------------------
+
+struct Particle {
+    pos_x: f32,
+    pos_y: f32,
+    vel_x: f32,
+    vel_y: f32,
+    life: f32,
+    max_life: f32,
+    color: i32,
+    active: bool,
+}
+
+struct ParticleSystem {
+    count: i32,
+}
+
+// Global fixed particle storage (up to 64 active particles for lightweight 60 FPS effects)
+// We provide helpers to spawn sparks, smoke, coin stars, and bounce dust.
+
+fn particle_create(x: f32, y: f32, vx: f32, vy: f32, life: f32, color: i32): Particle {
+    return Particle {
+        pos_x: x,
+        pos_y: y,
+        vel_x: vx,
+        vel_y: vy,
+        life: life,
+        max_life: life,
+        color: color,
+        active: true,
+    };
+}
+
+fn particle_update(p: Particle, dt: f32): Particle {
+    if (!p.active) {
+        return p;
+    }
+
+    let next_life: f32 = p.life - dt;
+    if (next_life <= (0.0 as f32)) {
+        return Particle {
+            pos_x: p.pos_x, pos_y: p.pos_y, vel_x: 0.0 as f32, vel_y: 0.0 as f32,
+            life: 0.0 as f32, max_life: p.max_life, color: p.color, active: false,
+        };
+    }
+
+    // Apply gravity and velocity step
+    let next_vy: f32 = p.vel_y + (400.0 as f32) * dt;
+    let next_x: f32 = p.pos_x + p.vel_x * dt;
+    let next_y: f32 = p.pos_y + next_vy * dt;
+
+    return Particle {
+        pos_x: next_x,
+        pos_y: next_y,
+        vel_x: p.vel_x * (0.98 as f32), // drag
+        vel_y: next_vy,
+        life: next_life,
+        max_life: p.max_life,
+        color: p.color,
+        active: true,
+    };
+}
+
+// Particle emitter types
+fn particle_type_dust(): i32 { return 1; }
+fn particle_type_sparkle(): i32 { return 2; }
+fn particle_type_splatter(): i32 { return 3; }
+fn particle_type_shockwave(): i32 { return 4; }

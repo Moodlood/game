@@ -1,0 +1,571 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Texture Loading, Sprite Sheet & Atlas Generator
+// Tests: Memory Allocation, Procedural Generation, BMP Decoding, Sprite Blitting
+// ============================================================================
+
+import "types.sph";
+import "canvas.sph";
+
+extern "C" fn sph_alloc(size: i64): *void;
+extern "C" fn sph_free(ptr: *void): void;
+extern "C" fn sph_file_exists(path: string): i32;
+extern "C" fn sph_file_read(path: string): string;
+extern "C" fn sph_string_len(s: string): i64;
+extern "C" fn sph_string_slice(s: string, start: i64, len: i64): string;
+extern "C" fn sph_canvas_inject_bigfoot(atlas_pixels: *i32, atlas_w: i32, atlas_h: i32, dst_x: i32, dst_y: i32): void;
+
+struct Texture {
+    id: i32,
+    width: i32,
+    height: i32,
+    pixels: *i32,
+}
+
+fn texture_create(width: i32, height: i32): Texture {
+    let byte_count: i64 = (width as i64) * (height as i64) * (4 as i64);
+    let mem: *void = sph_alloc(byte_count);
+    unsafe {
+        let pix: *i32 = mem as *i32;
+        return Texture {
+            id: 1,
+            width: width,
+            height: height,
+            pixels: pix,
+        };
+    }
+}
+
+fn texture_destroy(tex: Texture): void {
+    unsafe {
+        sph_free(tex.pixels as *void);
+    }
+}
+
+fn texture_set_pixel(tex: Texture, x: i32, y: i32, color: i32): void {
+    if (x >= 0 && x < tex.width && y >= 0 && y < tex.height) {
+        unsafe {
+            let offset: i64 = ((y as i64) * (tex.width as i64)) + (x as i64);
+            let ptr: *i32 = ((tex.pixels as i64) + (offset * (4 as i64))) as *i32;
+            *ptr = color;
+        }
+    }
+}
+
+fn texture_get_pixel(tex: Texture, x: i32, y: i32): i32 {
+    if (x >= 0 && x < tex.width && y >= 0 && y < tex.height) {
+        unsafe {
+            let offset: i64 = ((y as i64) * (tex.width as i64)) + (x as i64);
+            let ptr: *i32 = ((tex.pixels as i64) + (offset * (4 as i64))) as *i32;
+            return *ptr;
+        }
+    }
+    return 0;
+}
+
+// ----------------------------------------------------------------------------
+// Procedural Sprite Atlas Generator (128x128 Pixel Atlas with 16x16 Tile Grid)
+// ----------------------------------------------------------------------------
+
+fn generate_sprite_atlas(): Texture {
+    let tex = texture_create(128, 128);
+
+    // Clear texture to transparent
+    mut cy: i32 = 0;
+    while (cy < 128) {
+        mut cx: i32 = 0;
+        while (cx < 128) {
+            texture_set_pixel(tex, cx, cy, 0);
+            cx = cx + 1;
+        }
+        cy = cy + 1;
+    }
+
+    // 1. Tile (1, 0): Grass Platform (X: 16..31, Y: 0..15)
+    mut y: i32 = 0;
+    while (y < 16) {
+        mut x: i32 = 16;
+        while (x < 32) {
+            let lx: i32 = x - 16;
+            if (y < 4) {
+                mut c: i32 = color_to_u32(ColorRGBA { r: 105, g: 210, b: 70, a: 255 });
+                if ((lx + y) % 3 == 0) { c = color_grass_green(); }
+                texture_set_pixel(tex, x, y, c);
+            } else if (y < 6) {
+                mut c: i32 = color_dirt_brown();
+                if (lx % 2 == 0) { c = color_grass_green(); }
+                texture_set_pixel(tex, x, y, c);
+            } else {
+                mut c: i32 = color_dirt_brown();
+                if ((lx * 7 + y * 13) % 5 == 0) {
+                    c = color_to_u32(ColorRGBA { r: 110, g: 65, b: 35, a: 255 });
+                }
+                texture_set_pixel(tex, x, y, c);
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 2. Tile (2, 0): Dirt Block (X: 32..47, Y: 0..15)
+    y = 0;
+    while (y < 16) {
+        mut x: i32 = 32;
+        while (x < 48) {
+            let lx: i32 = x - 32;
+            mut c: i32 = color_dirt_brown();
+            if ((lx * 3 + y * 7) % 4 == 0) {
+                c = color_to_u32(ColorRGBA { r: 120, g: 70, b: 38, a: 255 });
+            }
+            texture_set_pixel(tex, x, y, c);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 3. Tile (3, 0): Stone Brick (X: 48..63, Y: 0..15)
+    y = 0;
+    while (y < 16) {
+        mut x: i32 = 48;
+        while (x < 64) {
+            let lx: i32 = x - 48;
+            if (y == 0 || y == 7 || y == 15 || (y < 7 && lx == 0) || (y >= 7 && lx == 8)) {
+                texture_set_pixel(tex, x, y, color_dark_gray());
+            } else {
+                mut c: i32 = color_stone_gray();
+                if ((lx + y) % 4 == 0) { c = color_light_gray(); }
+                texture_set_pixel(tex, x, y, c);
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 4. Tile (4, 0): Gold Coin (X: 64..79, Y: 0..15)
+    y = 0;
+    while (y < 16) {
+        mut x: i32 = 64;
+        while (x < 80) {
+            let dx: i32 = x - 71;
+            let dy: i32 = y - 8;
+            let dist_sq: i32 = dx * dx + dy * dy;
+            if (dist_sq <= 30) {
+                if (dist_sq <= 12) {
+                    texture_set_pixel(tex, x, y, color_to_u32(ColorRGBA { r: 255, g: 245, b: 140, a: 255 }));
+                } else if (dist_sq <= 22) {
+                    texture_set_pixel(tex, x, y, color_coin_gold());
+                } else {
+                    texture_set_pixel(tex, x, y, color_to_u32(ColorRGBA { r: 200, g: 150, b: 10, a: 255 }));
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 5. Tile (5, 0): Iron Spikes Hazard (X: 80..95, Y: 0..15)
+    y = 0;
+    while (y < 16) {
+        mut x: i32 = 80;
+        while (x < 96) {
+            let lx: i32 = x - 80;
+            mut s1: i32 = 15 - lx;
+            if (lx < 8) { s1 = lx; }
+            mut s2: i32 = 7 - lx;
+            if (lx >= 8) { s2 = lx - 8; }
+            let apex1: i32 = 15 - (s1 * 3);
+            let apex2: i32 = 15 - (s2 * 3);
+            if (y >= apex1 || y >= apex2) {
+                mut c: i32 = color_spike_silver();
+                if (y == apex1 || y == apex2) { c = color_white(); }
+                texture_set_pixel(tex, x, y, c);
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 6. Tile (6, 0): Spring Pad (X: 96..111, Y: 0..15)
+    y = 0;
+    while (y < 16) {
+        mut x: i32 = 96;
+        while (x < 112) {
+            let lx: i32 = x - 96;
+            if (y >= 13) {
+                texture_set_pixel(tex, x, y, color_dark_gray());
+            } else if (y >= 5 && y <= 7) {
+                texture_set_pixel(tex, x, y, color_spring_pink());
+            } else if (y >= 8 && y <= 12 && lx >= 5 && lx <= 10) {
+                texture_set_pixel(tex, x, y, color_yellow());
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 7. Tile (7, 0): Goal Flag (X: 112..127, Y: 0..15)
+    y = 0;
+    while (y < 16) {
+        mut x: i32 = 112;
+        while (x < 128) {
+            let lx: i32 = x - 112;
+            if (lx == 2 || lx == 3) {
+                texture_set_pixel(tex, x, y, color_coin_gold());
+            } else if (lx >= 4 && lx <= 13 && y >= 1 && y <= 8) {
+                mut c: i32 = color_green();
+                if (lx == 13 || y == 1 || y == 8) { c = color_yellow(); }
+                texture_set_pixel(tex, x, y, c);
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 8. Player Idle (X: 0..15, Y: 16..31)
+    y = 16;
+    while (y < 32) {
+        mut x: i32 = 0;
+        while (x < 16) {
+            let lx: i32 = x;
+            let ly: i32 = y - 16;
+            if (ly >= 1 && ly <= 5 && lx >= 5 && lx <= 10) {
+                if (ly == 3 && lx >= 7 && lx <= 9) {
+                    texture_set_pixel(tex, x, y, color_cyan());
+                } else {
+                    texture_set_pixel(tex, x, y, color_light_gray());
+                }
+            } else if (ly >= 6 && ly <= 10 && lx >= 4 && lx <= 11) {
+                mut c: i32 = color_blue();
+                if (lx == 7 || lx == 8) { c = color_yellow(); }
+                texture_set_pixel(tex, x, y, c);
+            } else if (ly >= 11 && ly <= 14 && (lx == 5 || lx == 6 || lx == 9 || lx == 10)) {
+                texture_set_pixel(tex, x, y, color_stone_gray());
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 9. Player Run (X: 16..31, Y: 16..31)
+    y = 16;
+    while (y < 32) {
+        mut x: i32 = 16;
+        while (x < 32) {
+            let lx: i32 = x - 16;
+            let ly: i32 = y - 16;
+            if (ly >= 1 && ly <= 5 && lx >= 5 && lx <= 10) {
+                if (ly == 3 && lx >= 7 && lx <= 9) {
+                    texture_set_pixel(tex, x, y, color_cyan());
+                } else {
+                    texture_set_pixel(tex, x, y, color_light_gray());
+                }
+            } else if (ly >= 6 && ly <= 10 && lx >= 4 && lx <= 11) {
+                texture_set_pixel(tex, x, y, color_blue());
+            } else if (ly >= 11 && ly <= 15) {
+                if ((lx == 3 || lx == 4) && ly >= 11 && ly <= 14) {
+                    texture_set_pixel(tex, x, y, color_stone_gray());
+                }
+                if ((lx == 11 || lx == 12) && ly >= 12 && ly <= 15) {
+                    texture_set_pixel(tex, x, y, color_stone_gray());
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 10. Player Jump (X: 32..47, Y: 16..31)
+    y = 16;
+    while (y < 32) {
+        mut x: i32 = 32;
+        while (x < 48) {
+            let lx: i32 = x - 32;
+            let ly: i32 = y - 16;
+            if (ly >= 0 && ly <= 4 && lx >= 5 && lx <= 10) {
+                if (ly == 2 && lx >= 7 && lx <= 9) {
+                    texture_set_pixel(tex, x, y, color_cyan());
+                } else {
+                    texture_set_pixel(tex, x, y, color_light_gray());
+                }
+            } else if (ly >= 5 && ly <= 9 && lx >= 4 && lx <= 11) {
+                texture_set_pixel(tex, x, y, color_blue());
+            } else if (ly >= 10 && ly <= 13 && lx >= 4 && lx <= 11) {
+                texture_set_pixel(tex, x, y, color_stone_gray());
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 11. Enemy Slime (X: 48..63, Y: 16..31)
+    y = 16;
+    while (y < 32) {
+        mut x: i32 = 48;
+        while (x < 64) {
+            let lx: i32 = x - 48;
+            let ly: i32 = y - 16;
+            if (ly >= 6 && ly <= 14 && lx >= 2 && lx <= 13) {
+                let dx: i32 = lx - 7;
+                let dy: i32 = ly - 10;
+                if (dx * dx + dy * dy <= 28) {
+                    if (ly == 8 && (lx == 5 || lx == 10)) {
+                        texture_set_pixel(tex, x, y, color_red());
+                    } else {
+                        texture_set_pixel(tex, x, y, color_magenta());
+                    }
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 12. Heart Icon (X: 64..79, Y: 16..31)
+    y = 16;
+    while (y < 32) {
+        mut x: i32 = 64;
+        while (x < 80) {
+            let lx: i32 = x - 64;
+            let ly: i32 = y - 16;
+            if ((ly == 2 && (lx == 4 || lx == 5 || lx == 10 || lx == 11)) ||
+                (ly == 3 && (lx >= 3 && lx <= 12)) ||
+                (ly == 4 && (lx >= 2 && lx <= 13)) ||
+                (ly == 5 && (lx >= 3 && lx <= 12)) ||
+                (ly == 6 && (lx >= 4 && lx <= 11)) ||
+                (ly == 7 && (lx >= 5 && lx <= 10)) ||
+                (ly == 8 && (lx >= 6 && lx <= 9)) ||
+                (ly == 9 && (lx == 7 || lx == 8))) {
+                texture_set_pixel(tex, x, y, color_red());
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 13. Chaser Drone / Bat (X: 80..95, Y: 16..31)
+    y = 16;
+    while (y < 32) {
+        mut x: i32 = 80;
+        while (x < 96) {
+            let lx: i32 = x - 80;
+            let ly: i32 = y - 16;
+            // Bat wings & body
+            if (ly >= 4 && ly <= 11) {
+                if (lx >= 6 && lx <= 9) {
+                    texture_set_pixel(tex, x, y, color_to_u32(ColorRGBA { r: 120, g: 30, b: 160, a: 255 }));
+                    if (ly == 6 && (lx == 7 || lx == 8)) {
+                        texture_set_pixel(tex, x, y, color_red()); // Red glowing eye
+                    }
+                } else if ((lx >= 2 && lx <= 5) || (lx >= 10 && lx <= 13)) {
+                    if (ly >= 5 && ly <= 9) {
+                        texture_set_pixel(tex, x, y, color_to_u32(ColorRGBA { r: 80, g: 20, b: 110, a: 255 }));
+                    }
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 14. Predictive Turret (X: 96..111, Y: 16..31)
+    y = 16;
+    while (y < 32) {
+        mut x: i32 = 96;
+        while (x < 112) {
+            let lx: i32 = x - 96;
+            let ly: i32 = y - 16;
+            if (ly >= 4 && ly <= 14 && lx >= 2 && lx <= 13) {
+                texture_set_pixel(tex, x, y, color_stone_gray());
+                if (ly >= 7 && ly <= 10 && lx >= 4 && lx <= 11) {
+                    texture_set_pixel(tex, x, y, color_cyan()); // Laser sensor
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 15. Sky Knight Boss (X: 0..23, Y: 32..63) - 24x32 large sprite
+    y = 32;
+    while (y < 64) {
+        mut x: i32 = 0;
+        while (x < 24) {
+            let lx: i32 = x;
+            let ly: i32 = y - 32;
+            // Horned helmet (ly 2..10, lx 6..17)
+            if (ly >= 2 && ly <= 10 && lx >= 6 && lx <= 17) {
+                if (ly == 6 && lx >= 9 && lx <= 14) {
+                    texture_set_pixel(tex, x, y, color_red()); // Visor slit
+                } else {
+                    texture_set_pixel(tex, x, y, color_coin_gold()); // Golden horned armor
+                }
+            }
+            // Torso & Cape (ly 11..22, lx 4..19)
+            else if (ly >= 11 && ly <= 22 && lx >= 4 && lx <= 19) {
+                if (lx <= 6 || lx >= 17) {
+                    texture_set_pixel(tex, x, y, color_red()); // Crimson cape
+                } else {
+                    texture_set_pixel(tex, x, y, color_light_gray()); // Chestplate
+                }
+            }
+            // Greaves / Boots (ly 23..30, lx 6..17)
+            else if (ly >= 23 && ly <= 30 && (lx >= 6 && lx <= 10 || lx >= 13 && lx <= 17)) {
+                texture_set_pixel(tex, x, y, color_dark_gray());
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 16. Moving Platform (X: 48..79, Y: 32..43) - 32x12 slab
+    y = 32;
+    while (y < 44) {
+        mut x: i32 = 48;
+        while (x < 80) {
+            let lx: i32 = x - 48;
+            let ly: i32 = y - 32;
+            if (ly < 4) {
+                texture_set_pixel(tex, x, y, color_light_gray());
+            } else if (ly < 10) {
+                texture_set_pixel(tex, x, y, color_stone_gray());
+            } else {
+                // Thruster glow
+                if (lx >= 6 && lx <= 10 || lx >= 21 && lx <= 25) {
+                    texture_set_pixel(tex, x, y, color_cyan());
+                } else {
+                    texture_set_pixel(tex, x, y, color_dark_gray());
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 17. Crumbling Block (X: 80..95, Y: 32..47)
+    y = 32;
+    while (y < 48) {
+        mut x: i32 = 80;
+        while (x < 96) {
+            let lx: i32 = x - 80;
+            let ly: i32 = y - 32;
+            mut c: i32 = color_stone_gray();
+            // Fractured cracks
+            if (lx == ly || (lx + ly == 15) || (lx == 8 && ly >= 4)) {
+                c = color_to_u32(ColorRGBA { r: 40, g: 45, b: 50, a: 255 });
+            }
+            texture_set_pixel(tex, x, y, c);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 18. Checkpoint Flag (X: 96..111, Y: 32..55)
+    y = 32;
+    while (y < 56) {
+        mut x: i32 = 96;
+        while (x < 112) {
+            let lx: i32 = x - 96;
+            let ly: i32 = y - 32;
+            if (lx == 3 || lx == 4) {
+                texture_set_pixel(tex, x, y, color_light_gray()); // Pole
+            } else if (lx >= 5 && lx <= 14 && ly >= 2 && ly <= 12) {
+                texture_set_pixel(tex, x, y, color_green()); // Beacon
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 19. Plasma Bullet (X: 112..119, Y: 32..39)
+    y = 32;
+    while (y < 40) {
+        mut x: i32 = 112;
+        while (x < 120) {
+            let dx: i32 = (x - 115);
+            let dy: i32 = (y - 35);
+            if (dx * dx + dy * dy <= 8) {
+                if (dx * dx + dy * dy <= 2) {
+                    texture_set_pixel(tex, x, y, color_white());
+                } else {
+                    texture_set_pixel(tex, x, y, color_cyan());
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 20. Bigfoot Playable Character Sprite Sheet (4 frames of 24x32 at X: 0..95, Y: 64..95)
+    // Frame 0 (Idle: 0, 64), Frame 1 (Walk 1: 24, 64), Frame 2 (Walk 2: 48, 64), Frame 3 (Jump: 72, 64)
+    unsafe {
+        sph_canvas_inject_bigfoot(tex.pixels, 128, 128, 0, 64);
+    }
+
+    return tex;
+}
+
+// ----------------------------------------------------------------------------
+// Sprite Blitting with Horizontal Flip & Alpha Transparency
+// ----------------------------------------------------------------------------
+
+fn sprite_blit(ce: CanvasEngine, tex: Texture,
+               tile_x: i32, tile_y: i32, tile_w: i32, tile_h: i32,
+               dst_x: i32, dst_y: i32, flip_x: bool): void {
+    mut sy: i32 = 0;
+    while (sy < tile_h) {
+        let dy: i32 = dst_y + sy;
+        if (dy >= 0 && dy < ce.height) {
+            mut sx: i32 = 0;
+            while (sx < tile_w) {
+                mut actual_sx: i32 = sx;
+                if (flip_x) {
+                    actual_sx = tile_w - 1 - sx;
+                }
+                let dx: i32 = dst_x + sx;
+                if (dx >= 0 && dx < ce.width) {
+                    let pixel: i32 = texture_get_pixel(tex, tile_x + actual_sx, tile_y + sy);
+                    let alpha: i32 = (pixel >> 24) & 255;
+                    if (alpha > 0) {
+                        canvas_engine_set_pixel(ce, dx, dy, pixel);
+                    }
+                }
+                sx = sx + 1;
+            }
+        }
+        sy = sy + 1;
+    }
+}
+
+// Scaled Sprite Blit for Squash & Stretch and Boss Rendering
+fn sprite_blit_scaled(ce: CanvasEngine, tex: Texture,
+                      tile_x: i32, tile_y: i32, tile_w: i32, tile_h: i32,
+                      dst_x: i32, dst_y: i32, dst_w: i32, dst_h: i32, flip_x: bool): void {
+    if (dst_w <= 0 || dst_h <= 0) {
+        return;
+    }
+    mut dy: i32 = 0;
+    while (dy < dst_h) {
+        let screen_y: i32 = dst_y + dy;
+        if (screen_y >= 0 && screen_y < ce.height) {
+            let sy: i32 = (dy * tile_h) / dst_h;
+            mut dx: i32 = 0;
+            while (dx < dst_w) {
+                let screen_x: i32 = dst_x + dx;
+                if (screen_x >= 0 && screen_x < ce.width) {
+                    mut sx: i32 = (dx * tile_w) / dst_w;
+                    if (flip_x) {
+                        sx = tile_w - 1 - sx;
+                    }
+                    let pixel: i32 = texture_get_pixel(tex, tile_x + sx, tile_y + sy);
+                    let alpha: i32 = (pixel >> 24) & 255;
+                    if (alpha > 0) {
+                        canvas_engine_set_pixel(ce, screen_x, screen_y, pixel);
+                    }
+                }
+                dx = dx + 1;
+            }
+        }
+        dy = dy + 1;
+    }
+}

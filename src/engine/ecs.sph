@@ -1,0 +1,532 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Entity-Component-System (ECS) Architecture
+// Tests: Structs, Memory Layout, Data-Oriented Components, Systems Processing
+// ============================================================================
+
+import "types.sph";
+import "simd_math.sph";
+import "animation.sph";
+import "collision.sph";
+import "physics.sph";
+
+// Entity Types / Archetypes
+fn entity_type_none(): i32 { return 0; }
+fn entity_type_player(): i32 { return 1; }
+fn entity_type_enemy(): i32 { return 2; }
+fn entity_type_coin(): i32 { return 3; }
+fn entity_type_spring(): i32 { return 4; }
+fn entity_type_goal(): i32 { return 5; }
+fn entity_type_drone(): i32 { return 6; }
+fn entity_type_turret(): i32 { return 7; }
+fn entity_type_bullet(): i32 { return 8; }
+fn entity_type_boss(): i32 { return 9; }
+fn entity_type_platform(): i32 { return 10; }
+fn entity_type_crumble(): i32 { return 11; }
+fn entity_type_checkpoint(): i32 { return 12; }
+fn entity_type_torch(): i32 { return 13; }
+
+// AI FSM States
+fn ai_state_patrol(): i32 { return 0; }
+fn ai_state_alert(): i32 { return 1; }
+fn ai_state_chase(): i32 { return 2; }
+fn ai_state_jump(): i32 { return 3; }
+
+struct Entity {
+    id: i32,
+    active: bool,
+    entity_type: i32,
+
+    // Transform
+    pos_x: f32,
+    pos_y: f32,
+    width: f32,
+    height: f32,
+
+    // Velocity & Physics
+    vel_x: f32,
+    vel_y: f32,
+    is_grounded: bool,
+    gravity_scale: f32,
+
+    // Collider
+    col_offset_x: f32,
+    col_offset_y: f32,
+    col_width: f32,
+    col_height: f32,
+    is_trigger: bool,
+
+    // Animation & Sprite
+    anim: AnimationState,
+
+    // AI & Controller parameters
+    health: i32,
+    max_health: i32,
+    coins: i32,
+    score: i32,
+    patrol_min: f32,
+    patrol_max: f32,
+    direction: f32,
+    coyote_timer: f32,
+    invincible_timer: f32,
+
+    // FSM, Juice & Boss Parameters
+    ai_state: i32,
+    ai_timer: f32,
+    shoot_timer: f32,
+    squash_x: f32,
+    squash_y: f32,
+    start_x: f32,
+    start_y: f32,
+    phase: i32,
+}
+
+fn entity_create_empty(id: i32): Entity {
+    return Entity {
+        id: id,
+        active: false,
+        entity_type: entity_type_none(),
+        pos_x: 0.0 as f32,
+        pos_y: 0.0 as f32,
+        width: 16.0 as f32,
+        height: 16.0 as f32,
+        vel_x: 0.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: false,
+        gravity_scale: 1.0 as f32,
+        col_offset_x: 0.0 as f32,
+        col_offset_y: 0.0 as f32,
+        col_width: 16.0 as f32,
+        col_height: 16.0 as f32,
+        is_trigger: false,
+        anim: animation_state_create(),
+        health: 3,
+        max_health: 3,
+        coins: 0,
+        score: 0,
+        patrol_min: 0.0 as f32,
+        patrol_max: 0.0 as f32,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: 0,
+        ai_timer: 0.0 as f32,
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: 0.0 as f32,
+        start_y: 0.0 as f32,
+        phase: 1,
+    };
+}
+
+fn entity_create_player(id: i32, x: f32, y: f32): Entity {
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_player(),
+        pos_x: x,
+        pos_y: y,
+        width: 24.0 as f32,
+        height: 32.0 as f32,
+        vel_x: 0.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: false,
+        gravity_scale: 1.0 as f32,
+        col_offset_x: 5.0 as f32,
+        col_offset_y: 4.0 as f32,
+        col_width: 14.0 as f32,
+        col_height: 28.0 as f32,
+        is_trigger: false,
+        anim: animation_state_create(),
+        health: 3,
+        max_health: 3,
+        coins: 0,
+        score: 0,
+        patrol_min: 0.0 as f32,
+        patrol_max: 0.0 as f32,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: 0,
+        ai_timer: 0.0 as f32,
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_enemy(id: i32, x: f32, y: f32, min_x: f32, max_x: f32): Entity {
+    mut anim = animation_state_create();
+    anim.clip_id = anim_clip_slime();
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_enemy(),
+        pos_x: x,
+        pos_y: y,
+        width: 16.0 as f32,
+        height: 16.0 as f32,
+        vel_x: 40.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: true,
+        gravity_scale: 1.0 as f32,
+        col_offset_x: 2.0 as f32,
+        col_offset_y: 4.0 as f32,
+        col_width: 12.0 as f32,
+        col_height: 12.0 as f32,
+        is_trigger: false,
+        anim: anim,
+        health: 1,
+        max_health: 1,
+        coins: 0,
+        score: 100,
+        patrol_min: min_x,
+        patrol_max: max_x,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: ai_state_patrol(),
+        ai_timer: 0.0 as f32,
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_drone(id: i32, x: f32, y: f32): Entity {
+    mut anim = animation_state_create();
+    anim.clip_id = anim_clip_drone();
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_drone(),
+        pos_x: x,
+        pos_y: y,
+        width: 16.0 as f32,
+        height: 16.0 as f32,
+        vel_x: 0.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: false,
+        gravity_scale: 0.0 as f32, // flying
+        col_offset_x: 2.0 as f32,
+        col_offset_y: 2.0 as f32,
+        col_width: 12.0 as f32,
+        col_height: 12.0 as f32,
+        is_trigger: false,
+        anim: anim,
+        health: 1,
+        max_health: 1,
+        coins: 0,
+        score: 150,
+        patrol_min: 0.0 as f32,
+        patrol_max: 0.0 as f32,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: ai_state_patrol(),
+        ai_timer: 0.0 as f32,
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_turret(id: i32, x: f32, y: f32): Entity {
+    mut anim = animation_state_create();
+    anim.clip_id = anim_clip_turret();
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_turret(),
+        pos_x: x,
+        pos_y: y,
+        width: 16.0 as f32,
+        height: 16.0 as f32,
+        vel_x: 0.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: true,
+        gravity_scale: 0.0 as f32,
+        col_offset_x: 1.0 as f32,
+        col_offset_y: 1.0 as f32,
+        col_width: 14.0 as f32,
+        col_height: 14.0 as f32,
+        is_trigger: false,
+        anim: anim,
+        health: 2,
+        max_health: 2,
+        coins: 0,
+        score: 200,
+        patrol_min: 0.0 as f32,
+        patrol_max: 0.0 as f32,
+        direction: -1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: 0,
+        ai_timer: 0.0 as f32,
+        shoot_timer: 1.5 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_bullet(id: i32, x: f32, y: f32, vx: f32, vy: f32): Entity {
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_bullet(),
+        pos_x: x,
+        pos_y: y,
+        width: 8.0 as f32,
+        height: 8.0 as f32,
+        vel_x: vx,
+        vel_y: vy,
+        is_grounded: false,
+        gravity_scale: 0.0 as f32,
+        col_offset_x: 1.0 as f32,
+        col_offset_y: 1.0 as f32,
+        col_width: 6.0 as f32,
+        col_height: 6.0 as f32,
+        is_trigger: true,
+        anim: animation_state_create(),
+        health: 1,
+        max_health: 1,
+        coins: 0,
+        score: 0,
+        patrol_min: 0.0 as f32,
+        patrol_max: 0.0 as f32,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: 0,
+        ai_timer: 4.0 as f32, // bullet lifetime
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_boss(id: i32, x: f32, y: f32): Entity {
+    mut anim = animation_state_create();
+    anim.clip_id = anim_clip_boss();
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_boss(),
+        pos_x: x,
+        pos_y: y,
+        width: 24.0 as f32,
+        height: 32.0 as f32,
+        vel_x: 50.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: true,
+        gravity_scale: 1.0 as f32,
+        col_offset_x: 2.0 as f32,
+        col_offset_y: 2.0 as f32,
+        col_width: 20.0 as f32,
+        col_height: 30.0 as f32,
+        is_trigger: false,
+        anim: anim,
+        health: 8,
+        max_health: 8,
+        coins: 0,
+        score: 1000,
+        patrol_min: x - (120.0 as f32),
+        patrol_max: x + (120.0 as f32),
+        direction: -1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: ai_state_patrol(),
+        ai_timer: 0.0 as f32,
+        shoot_timer: 2.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_platform(id: i32, x: f32, y: f32, min_x: f32, max_x: f32, speed: f32): Entity {
+    mut anim = animation_state_create();
+    anim.clip_id = anim_clip_platform();
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_platform(),
+        pos_x: x,
+        pos_y: y,
+        width: 32.0 as f32,
+        height: 12.0 as f32,
+        vel_x: speed,
+        vel_y: 0.0 as f32,
+        is_grounded: false,
+        gravity_scale: 0.0 as f32,
+        col_offset_x: 0.0 as f32,
+        col_offset_y: 0.0 as f32,
+        col_width: 32.0 as f32,
+        col_height: 12.0 as f32,
+        is_trigger: false,
+        anim: anim,
+        health: 1,
+        max_health: 1,
+        coins: 0,
+        score: 0,
+        patrol_min: min_x,
+        patrol_max: max_x,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: 0,
+        ai_timer: 0.0 as f32,
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_crumble(id: i32, x: f32, y: f32): Entity {
+    mut anim = animation_state_create();
+    anim.clip_id = anim_clip_crumble();
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_crumble(),
+        pos_x: x,
+        pos_y: y,
+        width: 16.0 as f32,
+        height: 16.0 as f32,
+        vel_x: 0.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: false,
+        gravity_scale: 0.0 as f32,
+        col_offset_x: 0.0 as f32,
+        col_offset_y: 0.0 as f32,
+        col_width: 16.0 as f32,
+        col_height: 16.0 as f32,
+        is_trigger: false,
+        anim: anim,
+        health: 1,
+        max_health: 1,
+        coins: 0,
+        score: 0,
+        patrol_min: 0.0 as f32,
+        patrol_max: 0.0 as f32,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: 0, // 0=idle solid, 1=shaking (0.5s), 2=fallen/hidden (3.0s)
+        ai_timer: 0.0 as f32,
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_checkpoint(id: i32, x: f32, y: f32): Entity {
+    mut anim = animation_state_create();
+    anim.clip_id = anim_clip_checkpoint();
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_checkpoint(),
+        pos_x: x,
+        pos_y: y,
+        width: 16.0 as f32,
+        height: 24.0 as f32,
+        vel_x: 0.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: true,
+        gravity_scale: 0.0 as f32,
+        col_offset_x: 2.0 as f32,
+        col_offset_y: 2.0 as f32,
+        col_width: 12.0 as f32,
+        col_height: 22.0 as f32,
+        is_trigger: true,
+        anim: anim,
+        health: 1,
+        max_health: 1,
+        coins: 0,
+        score: 50,
+        patrol_min: 0.0 as f32,
+        patrol_max: 0.0 as f32,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: 0, // 0 = inactive red, 1 = active green
+        ai_timer: 0.0 as f32,
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_create_coin(id: i32, x: f32, y: f32): Entity {
+    mut anim = animation_state_create();
+    anim.clip_id = anim_clip_coin();
+    return Entity {
+        id: id,
+        active: true,
+        entity_type: entity_type_coin(),
+        pos_x: x,
+        pos_y: y,
+        width: 16.0 as f32,
+        height: 16.0 as f32,
+        vel_x: 0.0 as f32,
+        vel_y: 0.0 as f32,
+        is_grounded: false,
+        gravity_scale: 0.0 as f32,
+        col_offset_x: 2.0 as f32,
+        col_offset_y: 2.0 as f32,
+        col_width: 12.0 as f32,
+        col_height: 12.0 as f32,
+        is_trigger: true,
+        anim: anim,
+        health: 1,
+        max_health: 1,
+        coins: 1,
+        score: 50,
+        patrol_min: 0.0 as f32,
+        patrol_max: 0.0 as f32,
+        direction: 1.0 as f32,
+        coyote_timer: 0.0 as f32,
+        invincible_timer: 0.0 as f32,
+        ai_state: 0,
+        ai_timer: 0.0 as f32,
+        shoot_timer: 0.0 as f32,
+        squash_x: 1.0 as f32,
+        squash_y: 1.0 as f32,
+        start_x: x,
+        start_y: y,
+        phase: 1,
+    };
+}
+
+fn entity_get_collider_aabb(e: Entity): AABB {
+    return aabb_create(e.pos_x + e.col_offset_x, e.pos_y + e.col_offset_y, e.col_width, e.col_height);
+}

@@ -1,0 +1,518 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: 32-bit RGBA SIMD Framebuffer Canvas Engine
+// Tests: SIMD Blitting, Direct Pixel Pointers, Line/Circle Rasterization, Bitmap Font
+// ============================================================================
+
+import "types.sph";
+
+extern "C" fn sph_canvas_create(hwnd: *void, width: i32, height: i32): *void;
+extern "C" fn sph_canvas_destroy(canvas: *void): void;
+extern "C" fn sph_canvas_get_pixels(canvas: *void): *i32;
+extern "C" fn sph_canvas_clear(canvas: *void, color: i32): void;
+extern "C" fn sph_canvas_fill_rect(canvas: *void, x: i32, y: i32, w: i32, h: i32, color: i32): void;
+extern "C" fn sph_canvas_draw_rect(canvas: *void, x: i32, y: i32, w: i32, h: i32, color: i32): void;
+extern "C" fn sph_canvas_blend_simd(canvas: *void, src_pixels: *i32, src_w: i32, src_h: i32, dst_x: i32, dst_y: i32, alpha: f32): void;
+extern "C" fn sph_canvas_present(canvas: *void): void;
+extern "C" fn sph_canvas_map_mouse(canvas: *void, client_x: i32, client_y: i32, out_x: *i32, out_y: *i32): void;
+extern "C" fn sph_canvas_apply_lighting_simd(canvas: *void, lights: *void, count: i32, amb_r: f32, amb_g: f32, amb_b: f32): void;
+
+struct LightSource {
+    x: f32,
+    y: f32,
+    radius: f32,
+    r: f32,
+    g: f32,
+    b: f32,
+    intensity: f32,
+}
+
+struct CanvasEngine {
+    handle: *void,
+    width: i32,
+    height: i32,
+    pixels: *i32,
+}
+
+fn canvas_engine_create(hwnd: *void, width: i32, height: i32): CanvasEngine {
+    let c: *void = sph_canvas_create(hwnd, width, height);
+    let pix: *i32 = sph_canvas_get_pixels(c);
+    return CanvasEngine {
+        handle: c,
+        width: width,
+        height: height,
+        pixels: pix,
+    };
+}
+
+fn canvas_engine_destroy(ce: CanvasEngine): void {
+    sph_canvas_destroy(ce.handle);
+}
+
+fn canvas_engine_clear(ce: CanvasEngine, color: i32): void {
+    sph_canvas_clear(ce.handle, color);
+}
+
+fn canvas_engine_fill_rect(ce: CanvasEngine, x: i32, y: i32, w: i32, h: i32, color: i32): void {
+    sph_canvas_fill_rect(ce.handle, x, y, w, h, color);
+}
+
+fn canvas_engine_draw_rect(ce: CanvasEngine, x: i32, y: i32, w: i32, h: i32, color: i32): void {
+    sph_canvas_draw_rect(ce.handle, x, y, w, h, color);
+}
+
+fn canvas_engine_present(ce: CanvasEngine): void {
+    sph_canvas_present(ce.handle);
+}
+
+// Maps mouse coordinates from window client space into internal canvas space (handles fullscreen & letterboxing)
+fn canvas_engine_map_mouse(ce: CanvasEngine, client_x: i32, client_y: i32): Vec2i {
+    mut mx: i32 = client_x;
+    mut my: i32 = client_y;
+    unsafe {
+        sph_canvas_map_mouse(ce.handle, client_x, client_y, &mx, &my);
+    }
+    return Vec2i { x: mx, y: my };
+}
+
+// Applies SIMD-accelerated 2D dynamic lighting pass
+fn canvas_engine_apply_lighting(ce: CanvasEngine, lights: *void, count: i32, amb_r: f32, amb_g: f32, amb_b: f32): void {
+    sph_canvas_apply_lighting_simd(ce.handle, lights, count, amb_r, amb_g, amb_b);
+}
+
+// Direct pixel set with bounds check
+fn canvas_engine_set_pixel(ce: CanvasEngine, x: i32, y: i32, color: i32): void {
+    if (x >= 0 && x < ce.width && y >= 0 && y < ce.height) {
+        unsafe {
+            let offset: i64 = ((y as i64) * (ce.width as i64)) + (x as i64);
+            let ptr: *i32 = ((ce.pixels as i64) + (offset * (4 as i64))) as *i32;
+            *ptr = color;
+        }
+    }
+}
+
+// Bresenham's Line Algorithm
+fn canvas_engine_draw_line(ce: CanvasEngine, x0: i32, y0: i32, x1: i32, y1: i32, color: i32): void {
+    mut x: i32 = x0;
+    mut y: i32 = y0;
+    mut dx: i32 = x1 - x0;
+    if (dx < 0) { dx = -dx; }
+    mut dy: i32 = y1 - y0;
+    if (dy < 0) { dy = -dy; }
+    mut sx: i32 = -1;
+    if (x0 < x1) { sx = 1; }
+    mut sy: i32 = -1;
+    if (y0 < y1) { sy = 1; }
+    mut err: i32 = dx - dy;
+
+    mut done: bool = false;
+    while (!done) {
+        canvas_engine_set_pixel(ce, x, y, color);
+        if (x == x1 && y == y1) {
+            done = true;
+        } else {
+            let e2: i32 = 2 * err;
+            if (e2 > -dy) {
+                err = err - dy;
+                x = x + sx;
+            }
+            if (e2 < dx) {
+                err = err + dx;
+                y = y + sy;
+            }
+        }
+    }
+}
+
+// Midpoint Circle Algorithm
+fn canvas_engine_draw_circle(ce: CanvasEngine, cx: i32, cy: i32, r: i32, color: i32): void {
+    mut x: i32 = 0;
+    mut y: i32 = r;
+    mut d: i32 = 3 - 2 * r;
+
+    while (y >= x) {
+        canvas_engine_set_pixel(ce, cx + x, cy + y, color);
+        canvas_engine_set_pixel(ce, cx - x, cy + y, color);
+        canvas_engine_set_pixel(ce, cx + x, cy - y, color);
+        canvas_engine_set_pixel(ce, cx - x, cy - y, color);
+        canvas_engine_set_pixel(ce, cx + y, cy + x, color);
+        canvas_engine_set_pixel(ce, cx - y, cy + x, color);
+        canvas_engine_set_pixel(ce, cx + y, cy - x, color);
+        canvas_engine_set_pixel(ce, cx - y, cy - x, color);
+
+        if (d < 0) {
+            d = d + 4 * x + 6;
+        } else {
+            d = d + 4 * (x - y) + 10;
+            y = y - 1;
+        }
+        x = x + 1;
+    }
+}
+
+fn canvas_engine_fill_circle(ce: CanvasEngine, cx: i32, cy: i32, r: i32, color: i32): void {
+    mut dy: i32 = -r;
+    while (dy <= r) {
+        mut dx: i32 = -r;
+        while (dx <= r) {
+            if (dx * dx + dy * dy <= r * r) {
+                canvas_engine_set_pixel(ce, cx + dx, cy + dy, color);
+            }
+            dx = dx + 1;
+        }
+        dy = dy + 1;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Embedded Bitmap Font Rasterizer (Crisp 5x7 Font for Retro HUD & Editor)
+// ----------------------------------------------------------------------------
+
+// Returns 7-row bitmask for a character (5 bits wide)
+fn font_get_glyph_row(c: i32, row: i32): i32 {
+    // Digits 0-9
+    if (c == 48) { // '0'
+        if (row == 0 || row == 6) { return 14; } // .111.
+        if (row == 1 || row == 5) { return 17; } // 1...1
+        if (row == 2) { return 19; }             // 1..11
+        if (row == 3) { return 21; }             // 1.1.1
+        if (row == 4) { return 25; }             // 11..1
+        return 0;
+    }
+    if (c == 49) { // '1'
+        if (row == 0) { return 4; }
+        if (row == 1) { return 12; }
+        if (row == 6) { return 31; }
+        return 4;
+    }
+    if (c == 50) { // '2'
+        if (row == 0) { return 14; }
+        if (row == 1) { return 17; }
+        if (row == 2) { return 1; }
+        if (row == 3) { return 6; }
+        if (row == 4) { return 8; }
+        if (row == 5) { return 16; }
+        if (row == 6) { return 31; }
+        return 0;
+    }
+    if (c == 51) { // '3'
+        if (row == 0 || row == 6) { return 14; }
+        if (row == 1 || row == 5) { return 17; }
+        if (row == 2) { return 1; }
+        if (row == 3) { return 6; }
+        if (row == 4) { return 1; }
+        return 0;
+    }
+    if (c == 52) { // '4'
+        if (row == 0) { return 2; }
+        if (row == 1) { return 6; }
+        if (row == 2) { return 10; }
+        if (row == 3) { return 18; }
+        if (row == 4) { return 31; }
+        if (row == 5 || row == 6) { return 2; }
+        return 0;
+    }
+    if (c == 53) { // '5'
+        if (row == 0 || row == 6) { return 31; }
+        if (row == 1) { return 16; }
+        if (row == 2) { return 30; }
+        if (row == 3 || row == 4) { return 1; }
+        if (row == 5) { return 17; }
+        return 0;
+    }
+    if (c == 54) { // '6'
+        if (row == 0 || row == 6) { return 14; }
+        if (row == 1) { return 17; }
+        if (row == 2) { return 16; }
+        if (row == 3) { return 30; }
+        if (row == 4 || row == 5) { return 17; }
+        return 0;
+    }
+    if (c == 55) { // '7'
+        if (row == 0) { return 31; }
+        if (row == 1) { return 1; }
+        if (row == 2) { return 2; }
+        if (row == 3) { return 4; }
+        if (row == 4) { return 8; }
+        if (row == 5 || row == 6) { return 8; }
+        return 0;
+    }
+    if (c == 56) { // '8'
+        if (row == 0 || row == 3 || row == 6) { return 14; }
+        if (row == 1 || row == 2 || row == 4 || row == 5) { return 17; }
+        return 0;
+    }
+    if (c == 57) { // '9'
+        if (row == 0 || row == 6) { return 14; }
+        if (row == 1 || row == 2) { return 17; }
+        if (row == 3) { return 15; }
+        if (row == 4) { return 1; }
+        if (row == 5) { return 17; }
+        return 0;
+    }
+
+    // Common Uppercase Letters
+    if (c == 65) { // 'A'
+        if (row == 0) { return 14; }
+        if (row == 1 || row == 2) { return 17; }
+        if (row == 3) { return 31; }
+        if (row >= 4) { return 17; }
+        return 0;
+    }
+    if (c == 66) { // 'B'
+        if (row == 0 || row == 3 || row == 6) { return 30; }
+        return 17;
+    }
+    if (c == 67) { // 'C'
+        if (row == 0 || row == 6) { return 14; }
+        if (row == 1 || row == 5) { return 17; }
+        return 16;
+    }
+    if (c == 68) { // 'D'
+        if (row == 0 || row == 6) { return 30; }
+        return 17;
+    }
+    if (c == 69) { // 'E'
+        if (row == 0 || row == 6) { return 31; }
+        if (row == 3) { return 30; }
+        return 16;
+    }
+    if (c == 70) { // 'F'
+        if (row == 0) { return 31; }
+        if (row == 3) { return 30; }
+        return 16;
+    }
+    if (c == 71) { // 'G'
+        if (row == 0 || row == 6) { return 14; }
+        if (row == 1) { return 17; }
+        if (row == 2) { return 16; }
+        if (row == 3) { return 23; }
+        if (row == 4 || row == 5) { return 17; }
+        return 0;
+    }
+    if (c == 72) { // 'H'
+        if (row == 3) { return 31; }
+        return 17;
+    }
+    if (c == 73) { // 'I'
+        if (row == 0 || row == 6) { return 31; }
+        return 4;
+    }
+    if (c == 74) { // 'J'
+        if (row == 0) { return 31; }
+        if (row <= 4) { return 2; }
+        if (row == 5) { return 18; }
+        if (row == 6) { return 12; }
+        return 0;
+    }
+    if (c == 75) { // 'K'
+        if (row == 0 || row == 6) { return 17; }
+        if (row == 1 || row == 5) { return 18; }
+        if (row == 2 || row == 4) { return 20; }
+        if (row == 3) { return 24; }
+        return 0;
+    }
+    if (c == 76) { // 'L'
+        if (row == 6) { return 31; }
+        return 16;
+    }
+    if (c == 77) { // 'M'
+        if (row == 0) { return 17; }
+        if (row == 1) { return 27; }
+        if (row == 2) { return 21; }
+        return 17;
+    }
+    if (c == 78) { // 'N'
+        if (row == 0 || row == 6) { return 17; }
+        if (row == 1) { return 25; }
+        if (row == 2) { return 21; }
+        if (row == 3) { return 19; }
+        return 17;
+    }
+    if (c == 79) { // 'O'
+        if (row == 0 || row == 6) { return 14; }
+        return 17;
+    }
+    if (c == 80) { // 'P'
+        if (row == 0 || row == 3) { return 30; }
+        if (row == 1 || row == 2) { return 17; }
+        return 16;
+    }
+    if (c == 81) { // 'Q'
+        if (row == 0) { return 14; }
+        if (row == 5) { return 19; }
+        if (row == 6) { return 13; }
+        return 17;
+    }
+    if (c == 82) { // 'R'
+        if (row == 0 || row == 3) { return 30; }
+        if (row == 1 || row == 2) { return 17; }
+        if (row == 4) { return 20; }
+        if (row == 5) { return 18; }
+        if (row == 6) { return 17; }
+        return 0;
+    }
+    if (c == 83) { // 'S'
+        if (row == 0 || row == 3 || row == 6) { return 14; }
+        if (row == 1 || row == 2) { return 16; }
+        if (row == 4 || row == 5) { return 1; }
+        return 0;
+    }
+    if (c == 84) { // 'T'
+        if (row == 0) { return 31; }
+        return 4;
+    }
+    if (c == 85) { // 'U'
+        if (row == 6) { return 14; }
+        return 17;
+    }
+    if (c == 86) { // 'V'
+        if (row <= 4) { return 17; }
+        if (row == 5) { return 10; }
+        if (row == 6) { return 4; }
+        return 0;
+    }
+    if (c == 87) { // 'W'
+        if (row <= 3) { return 17; }
+        if (row == 4) { return 21; }
+        if (row == 5) { return 27; }
+        if (row == 6) { return 17; }
+        return 0;
+    }
+    if (c == 88) { // 'X'
+        if (row == 0 || row == 6) { return 17; }
+        if (row == 1 || row == 5) { return 10; }
+        if (row == 2 || row == 4) { return 4; }
+        if (row == 3) { return 4; }
+        return 0;
+    }
+    if (c == 89) { // 'Y'
+        if (row == 0 || row == 1) { return 17; }
+        if (row == 2) { return 10; }
+        if (row == 3) { return 4; }
+        return 4;
+    }
+    if (c == 90) { // 'Z'
+        if (row == 0 || row == 6) { return 31; }
+        if (row == 1) { return 2; }
+        if (row == 2) { return 4; }
+        if (row == 3) { return 8; }
+        if (row == 4) { return 16; }
+        if (row == 5) { return 31; }
+        return 0;
+    }
+
+    // Punctuation & Symbols
+    if (c == 58) { // ':'
+        if (row == 2 || row == 4) { return 4; }
+        return 0;
+    }
+    if (c == 46) { // '.'
+        if (row == 6) { return 4; }
+        return 0;
+    }
+    if (c == 45) { // '-'
+        if (row == 3) { return 14; }
+        return 0;
+    }
+    if (c == 43) { // '+'
+        if (row == 1 || row == 5) { return 4; }
+        if (row == 2 || row == 4) { return 4; }
+        if (row == 3) { return 31; }
+        return 0;
+    }
+    if (c == 33) { // '!'
+        if (row <= 4) { return 4; }
+        if (row == 6) { return 4; }
+        return 0;
+    }
+    if (c == 63) { // '?'
+        if (row == 0) { return 14; }
+        if (row == 1) { return 17; }
+        if (row == 2) { return 1; }
+        if (row == 3) { return 6; }
+        if (row == 4) { return 4; }
+        if (row == 6) { return 4; }
+        return 0;
+    }
+    if (c == 47) { // '/'
+        if (row == 0) { return 1; }
+        if (row == 1) { return 2; }
+        if (row == 2) { return 4; }
+        if (row == 3) { return 4; }
+        if (row == 4) { return 8; }
+        if (row == 5) { return 16; }
+        if (row == 6) { return 16; }
+        return 0;
+    }
+    if (c == 60) { // '<'
+        if (row == 0 || row == 6) { return 2; }
+        if (row == 1 || row == 5) { return 4; }
+        if (row == 2 || row == 4) { return 8; }
+        if (row == 3) { return 16; }
+        return 0;
+    }
+    if (c == 62) { // '>'
+        if (row == 0 || row == 6) { return 8; }
+        if (row == 1 || row == 5) { return 4; }
+        if (row == 2 || row == 4) { return 2; }
+        if (row == 3) { return 1; }
+        return 0;
+    }
+
+    return 0; // Space or unmapped
+}
+
+fn canvas_engine_draw_char(ce: CanvasEngine, x: i32, y: i32, ascii: i32, color: i32, scale: i32): void {
+    // Convert lowercase to uppercase for retro arcade look
+    mut code: i32 = ascii;
+    if (code >= 97 && code <= 122) {
+        code = code - 32;
+    }
+
+    mut row: i32 = 0;
+    while (row < 7) {
+        let mask: i32 = font_get_glyph_row(code, row);
+        mut col: i32 = 0;
+        while (col < 5) {
+            let bit: i32 = (mask >> (4 - col)) & 1;
+            if (bit == 1) {
+                if (scale <= 1) {
+                    canvas_engine_set_pixel(ce, x + col, y + row, color);
+                } else {
+                    canvas_engine_fill_rect(ce, x + col * scale, y + row * scale, scale, scale, color);
+                }
+            }
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+}
+
+extern "C" fn sph_string_len(s: string): i64;
+extern "C" fn sph_string_slice(s: string, start: i64, len: i64): string;
+extern "C" fn sph_string_char_at(s: string, index: i64): i32;
+
+// Helper to get ASCII code of character at position in string (zero-allocation direct C runtime read)
+fn string_char_code_at(s: string, index: i64): i32 {
+    mut code: i32 = sph_string_char_at(s, index);
+    if (code >= 97 && code <= 122) {
+        code = code - 32; // Convert lowercase to uppercase for retro font glyphs
+    }
+    return code;
+}
+
+fn canvas_engine_draw_text(ce: CanvasEngine, x: i32, y: i32, text: string, color: i32, scale: i32): void {
+    let len: i64 = sph_string_len(text);
+    mut i: i64 = 0 as i64;
+    mut cur_x: i32 = x;
+    let char_w: i32 = 6 * scale; // 5 px glyph + 1 px spacing
+
+    while (i < len) {
+        let code: i32 = string_char_code_at(text, i);
+        canvas_engine_draw_char(ce, cur_x, y, code, color, scale);
+        cur_x = cur_x + char_w;
+        i = i + (1 as i64);
+    }
+}

@@ -1,0 +1,19 @@
+# Build temporaries and outputs
+*.o
+*.s
+*.res
+*.obj
+*.exe
+!bin/game.exe
+
+# Ignore 76MB compiler archive (keep runtime libraries)
+lib/libsphc_core.a
+
+# Editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Test artifacts
+*.dat

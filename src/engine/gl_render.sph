@@ -1,0 +1,110 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Hardware OpenGL 2D Rendering Pipeline
+// Tests: OpenGL Context, Double Buffering, Orthographic Projection, Primitive Batching
+// ============================================================================
+
+import "types.sph";
+
+extern "C" fn sph_gl_context_create(hwnd: *void): *void;
+extern "C" fn sph_gl_swap_buffers(hwnd: *void): void;
+extern "C" fn sph_gl_make_current(hwnd: *void, ctx: *void): void;
+
+extern "C" fn glClearColor(r: f32, g: f32, b: f32, a: f32): void;
+extern "C" fn glClear(mask: i32): void;
+extern "C" fn glViewport(x: i32, y: i32, width: i32, height: i32): void;
+extern "C" fn glMatrixMode(mode: i32): void;
+extern "C" fn glLoadIdentity(): void;
+extern "C" fn glOrtho(left: f64, right: f64, bottom: f64, top: f64, nearVal: f64, farVal: f64): void;
+extern "C" fn glBegin(mode: i32): void;
+extern "C" fn glEnd(): void;
+extern "C" fn glVertex2f(x: f32, y: f32): void;
+extern "C" fn glColor4f(r: f32, g: f32, b: f32, a: f32): void;
+extern "C" fn glEnable(cap: i32): void;
+extern "C" fn glDisable(cap: i32): void;
+extern "C" fn glBlendFunc(sfactor: i32, dfactor: i32): void;
+
+struct GLRenderer {
+    hwnd: *void,
+    context: *void,
+    width: i32,
+    height: i32,
+    is_active: bool,
+}
+
+fn gl_renderer_create(hwnd: *void, width: i32, height: i32): GLRenderer {
+    let ctx: *void = sph_gl_context_create(hwnd);
+    mut active: bool = false;
+    unsafe {
+        active = (ctx as i64) != (0 as i64);
+    }
+
+    if (active) {
+        sph_gl_make_current(hwnd, ctx);
+        glViewport(0, 0, width, height);
+        glMatrixMode(5889); // GL_PROJECTION
+        glLoadIdentity();
+        // Top-left (0,0) down to (width, height)
+        glOrtho(0.0, width as f64, height as f64, 0.0, -1.0, 1.0);
+        glMatrixMode(5888); // GL_MODELVIEW
+        glLoadIdentity();
+
+        // Enable alpha blending
+        glEnable(3042); // GL_BLEND
+        glBlendFunc(770, 771); // GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+    }
+
+    return GLRenderer {
+        hwnd: hwnd,
+        context: ctx,
+        width: width,
+        height: height,
+        is_active: active,
+    };
+}
+
+fn gl_renderer_begin_frame(gl: GLRenderer, bg_color: ColorRGBA): void {
+    if (!gl.is_active) { return; }
+    let r: f32 = (bg_color.r as f32) / (255.0 as f32);
+    let g: f32 = (bg_color.g as f32) / (255.0 as f32);
+    let b: f32 = (bg_color.b as f32) / (255.0 as f32);
+    let a: f32 = (bg_color.a as f32) / (255.0 as f32);
+    glClearColor(r, g, b, a);
+    glClear(16384); // GL_COLOR_BUFFER_BIT
+}
+
+fn gl_renderer_draw_rect(gl: GLRenderer, x: f32, y: f32, w: f32, h: f32, color: ColorRGBA): void {
+    if (!gl.is_active) { return; }
+    let r: f32 = (color.r as f32) / (255.0 as f32);
+    let g: f32 = (color.g as f32) / (255.0 as f32);
+    let b: f32 = (color.b as f32) / (255.0 as f32);
+    let a: f32 = (color.a as f32) / (255.0 as f32);
+
+    glColor4f(r, g, b, a);
+    glBegin(7); // GL_QUADS
+    glVertex2f(x, y);
+    glVertex2f(x + w, y);
+    glVertex2f(x + w, y + h);
+    glVertex2f(x, y + h);
+    glEnd();
+}
+
+fn gl_renderer_draw_line(gl: GLRenderer, x0: f32, y0: f32, x1: f32, y1: f32, color: ColorRGBA): void {
+    if (!gl.is_active) { return; }
+    let r: f32 = (color.r as f32) / (255.0 as f32);
+    let g: f32 = (color.g as f32) / (255.0 as f32);
+    let b: f32 = (color.b as f32) / (255.0 as f32);
+    let a: f32 = (color.a as f32) / (255.0 as f32);
+
+    glColor4f(r, g, b, a);
+    glBegin(1); // GL_LINES
+    glVertex2f(x0, y0);
+    glVertex2f(x1, y1);
+    glEnd();
+}
+
+fn gl_renderer_end_frame(gl: GLRenderer): void {
+    if (!gl.is_active) { return; }
+    sph_gl_swap_buffers(gl.hwnd);
+}

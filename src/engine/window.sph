@@ -1,0 +1,78 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Native GUI Window Management & Event Loop
+// Tests: Native Win32 Subsystem, Windowing, Non-blocking Event Pump, Message Box
+// ============================================================================
+
+import "types.sph";
+
+extern "C" fn sph_gui_window_create(title: string, width: i32, height: i32): *void;
+extern "C" fn sph_gui_window_show(hwnd: *void, show: i32): void;
+extern "C" fn sph_gui_window_set_title(hwnd: *void, title: string): void;
+extern "C" fn sph_gui_window_close(hwnd: *void): void;
+extern "C" fn sph_gui_window_is_open(hwnd: *void): i32;
+extern "C" fn sph_gui_window_destroy(hwnd: *void): void;
+extern "C" fn sph_gui_window_toggle_fullscreen(hwnd: *void): void;
+extern "C" fn sph_gui_pump_events(): i32;
+extern "C" fn sph_gui_quit(): void;
+extern "C" fn sph_gui_messagebox(parent: *void, text: string, title: string, utype: i32): i32;
+
+extern "C" fn GetCursorPos(lpPoint: *Vec2i): i32;
+extern "C" fn ScreenToClient(hwnd: *void, lpPoint: *Vec2i): i32;
+extern "C" fn GetClientRect(hwnd: *void, lpRect: *Recti): i32;
+
+struct EngineWindow {
+    hwnd: *void,
+    title: string,
+    width: i32,
+    height: i32,
+    is_open: bool,
+}
+
+fn engine_window_create(title: string, width: i32, height: i32): EngineWindow {
+    let handle: *void = sph_gui_window_create(title, width, height);
+    sph_gui_window_show(handle, 1);
+    return EngineWindow {
+        hwnd: handle,
+        title: title,
+        width: width,
+        height: height,
+        is_open: true,
+    };
+}
+
+fn engine_window_set_title(win: EngineWindow, title: string): void {
+    sph_gui_window_set_title(win.hwnd, title);
+}
+
+fn engine_window_pump(win: EngineWindow): bool {
+    let running: i32 = sph_gui_pump_events();
+    if (running == 0) {
+        return false;
+    }
+    let open_flag: i32 = sph_gui_window_is_open(win.hwnd);
+    if (open_flag == 0) {
+        return false;
+    }
+    return true;
+}
+
+fn engine_window_close(win: EngineWindow): void {
+    sph_gui_window_close(win.hwnd);
+}
+
+fn engine_window_toggle_fullscreen(win: EngineWindow): void {
+    sph_gui_window_toggle_fullscreen(win.hwnd);
+}
+
+fn engine_window_get_mouse_client(win: EngineWindow): Vec2i {
+    mut pt: Vec2i = Vec2i { x: 0, y: 0 };
+    GetCursorPos(&pt);
+    ScreenToClient(win.hwnd, &pt);
+    return pt;
+}
+
+fn engine_window_show_dialog(win: EngineWindow, message: string, title: string): void {
+    sph_gui_messagebox(win.hwnd, message, title, 64); // MB_ICONINFORMATION
+}

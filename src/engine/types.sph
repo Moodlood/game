@@ -1,0 +1,154 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Common Types, Primitives & Generics
+// Tests: Generics (Pair<T, U>), Value Structs, Color conversion
+// ============================================================================
+
+// Generic container testing generic struct instantiation
+struct Pair<T, U> {
+    first: T,
+    second: U,
+}
+
+fn make_pair<T, U>(a: T, b: U): Pair<T, U> {
+    return Pair<T, U> { first: a, second: b };
+}
+
+struct Vec2f {
+    x: f32,
+    y: f32,
+}
+
+fn vec2f(x: f32, y: f32): Vec2f {
+    return Vec2f { x: x, y: y };
+}
+
+fn vec2f_add(a: Vec2f, b: Vec2f): Vec2f {
+    return Vec2f { x: a.x + b.x, y: a.y + b.y };
+}
+
+fn vec2f_sub(a: Vec2f, b: Vec2f): Vec2f {
+    return Vec2f { x: a.x - b.x, y: a.y - b.y };
+}
+
+fn vec2f_scale(v: Vec2f, s: f32): Vec2f {
+    return Vec2f { x: v.x * s, y: v.y * s };
+}
+
+fn vec2f_dot(a: Vec2f, b: Vec2f): f32 {
+    return a.x * b.x + a.y * b.y;
+}
+
+struct Vec2i {
+    x: i32,
+    y: i32,
+}
+
+fn vec2i(x: i32, y: i32): Vec2i {
+    return Vec2i { x: x, y: y };
+}
+
+fn vec2i_add(a: Vec2i, b: Vec2i): Vec2i {
+    return Vec2i { x: a.x + b.x, y: a.y + b.y };
+}
+
+struct Rectf {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+fn rectf(x: f32, y: f32, w: f32, h: f32): Rectf {
+    return Rectf { x: x, y: y, w: w, h: h };
+}
+
+struct Recti {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+fn recti(x: i32, y: i32, w: i32, h: i32): Recti {
+    return Recti { x: x, y: y, w: w, h: h };
+}
+
+struct ColorRGBA {
+    r: i32,
+    g: i32,
+    b: i32,
+    a: i32,
+}
+
+fn color_rgba(r: i32, g: i32, b: i32, a: i32): ColorRGBA {
+    return ColorRGBA { r: r, g: g, b: b, a: a };
+}
+
+// Converts RGBA to 32-bit integer (0xAABBGGRR / 0xAARRGGBB depending on canvas format)
+// Windows DIB standard top-down 32-bit surface format: 0xAARRGGBB
+fn color_to_u32(c: ColorRGBA): i32 {
+    let a_part: i32 = (c.a & 255) << 24;
+    let r_part: i32 = (c.r & 255) << 16;
+    let g_part: i32 = (c.g & 255) << 8;
+    let b_part: i32 = c.b & 255;
+    return a_part | r_part | g_part | b_part;
+}
+
+fn u32_to_color(u: i32): ColorRGBA {
+    let a: i32 = (u >> 24) & 255;
+    let r: i32 = (u >> 16) & 255;
+    let g: i32 = (u >> 8) & 255;
+    let b: i32 = u & 255;
+    return ColorRGBA { r: r, g: g, b: b, a: a };
+}
+
+// Converts i32 integer to string representation
+fn i32_to_string(val: i32): string {
+    if (val == 0) { return "0"; }
+    mut n: i32 = val;
+    mut is_neg: bool = false;
+    if (n < 0) { is_neg = true; n = -n; }
+    mut s: string = "";
+    while (n > 0) {
+        let digit: i32 = n % 10;
+        if (digit == 0) { s = "0" + s; }
+        else if (digit == 1) { s = "1" + s; }
+        else if (digit == 2) { s = "2" + s; }
+        else if (digit == 3) { s = "3" + s; }
+        else if (digit == 4) { s = "4" + s; }
+        else if (digit == 5) { s = "5" + s; }
+        else if (digit == 6) { s = "6" + s; }
+        else if (digit == 7) { s = "7" + s; }
+        else if (digit == 8) { s = "8" + s; }
+        else if (digit == 9) { s = "9" + s; }
+        n = n / 10;
+    }
+    if (is_neg) { s = "-" + s; }
+    return s;
+}
+
+// Color palettes for UI and retro rendering
+fn color_white(): i32 { return color_to_u32(ColorRGBA { r: 255, g: 255, b: 255, a: 255 }); }
+fn color_black(): i32 { return color_to_u32(ColorRGBA { r: 0, g: 0, b: 0, a: 255 }); }
+fn color_red(): i32 { return color_to_u32(ColorRGBA { r: 235, g: 60, b: 60, a: 255 }); }
+fn color_green(): i32 { return color_to_u32(ColorRGBA { r: 60, g: 200, b: 70, a: 255 }); }
+fn color_blue(): i32 { return color_to_u32(ColorRGBA { r: 60, g: 130, b: 245, a: 255 }); }
+fn color_yellow(): i32 { return color_to_u32(ColorRGBA { r: 255, g: 220, b: 50, a: 255 }); }
+fn color_cyan(): i32 { return color_to_u32(ColorRGBA { r: 60, g: 225, b: 240, a: 255 }); }
+fn color_magenta(): i32 { return color_to_u32(ColorRGBA { r: 230, g: 70, b: 210, a: 255 }); }
+fn color_orange(): i32 { return color_to_u32(ColorRGBA { r: 250, g: 140, b: 30, a: 255 }); }
+fn color_purple(): i32 { return color_to_u32(ColorRGBA { r: 150, g: 70, b: 220, a: 255 }); }
+fn color_dark_gray(): i32 { return color_to_u32(ColorRGBA { r: 40, g: 45, b: 55, a: 255 }); }
+fn color_mid_gray(): i32 { return color_to_u32(ColorRGBA { r: 90, g: 95, b: 110, a: 255 }); }
+fn color_light_gray(): i32 { return color_to_u32(ColorRGBA { r: 180, g: 185, b: 195, a: 255 }); }
+fn color_sky_blue(): i32 { return color_to_u32(ColorRGBA { r: 120, g: 180, b: 245, a: 255 }); }
+fn color_grass_green(): i32 { return color_to_u32(ColorRGBA { r: 85, g: 180, b: 60, a: 255 }); }
+fn color_dirt_brown(): i32 { return color_to_u32(ColorRGBA { r: 140, g: 85, b: 45, a: 255 }); }
+fn color_stone_gray(): i32 { return color_to_u32(ColorRGBA { r: 120, g: 125, b: 135, a: 255 }); }
+fn color_coin_gold(): i32 { return color_to_u32(ColorRGBA { r: 255, g: 215, b: 0, a: 255 }); }
+fn color_spike_silver(): i32 { return color_to_u32(ColorRGBA { r: 200, g: 205, b: 215, a: 255 }); }
+fn color_spring_pink(): i32 { return color_to_u32(ColorRGBA { r: 255, g: 105, b: 180, a: 255 }); }
+fn color_lava_red(): i32 { return color_to_u32(ColorRGBA { r: 240, g: 70, b: 30, a: 255 }); }
+fn color_transparent(): i32 { return 0; }

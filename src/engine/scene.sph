@@ -1,0 +1,51 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Scene Management & State Machine
+// Tests: Scene Hierarchy, Level Transitions, Score/Coin Persistence
+// ============================================================================
+
+fn scene_id_title(): i32 { return 0; }
+fn scene_id_gameplay(): i32 { return 1; }
+fn scene_id_editor(): i32 { return 2; }
+fn scene_id_victory(): i32 { return 3; }
+fn scene_id_game_over(): i32 { return 4; }
+
+struct SceneManager {
+    current_scene: i32,
+    current_level_index: i32,
+    total_score: i32,
+    total_coins: i32,
+    timer: f32,
+}
+
+fn scene_manager_create(): SceneManager {
+    return SceneManager {
+        current_scene: scene_id_title(),
+        current_level_index: 0,
+        total_score: 0,
+        total_coins: 0,
+        timer: 0.0 as f32,
+    };
+}
+
+fn scene_set(sm: SceneManager, scene_id: i32): SceneManager {
+    return SceneManager {
+        current_scene: scene_id,
+        current_level_index: sm.current_level_index,
+        total_score: sm.total_score,
+        total_coins: sm.total_coins,
+        timer: 0.0 as f32,
+    };
+}
+
+fn scene_next_level(sm: SceneManager): SceneManager {
+    let next_lvl: i32 = sm.current_level_index + 1;
+    return SceneManager {
+        current_scene: scene_id_gameplay(),
+        current_level_index: next_lvl,
+        total_score: sm.total_score,
+        total_coins: sm.total_coins,
+        timer: 0.0 as f32,
+    };
+}

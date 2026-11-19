@@ -1,0 +1,70 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Native 4-Channel Chiptune Synthesizer & Audio Mixer
+// Zero-dependency winmm.dll PCM software mixer running at 44.1 kHz 16-bit
+// 4 Classic Waveforms: Square (melody), Triangle (bass), Sawtooth (leads), Noise (LFSR)
+// ============================================================================
+
+extern "C" fn sph_audio_init(): void;
+extern "C" fn sph_audio_shutdown(): void;
+extern "C" fn sph_audio_play_sfx(sfx_id: i32): void;
+extern "C" fn sph_audio_set_bgm(track_id: i32): void;
+extern "C" fn sph_audio_set_volume(vol: f32): void;
+extern "C" fn sph_audio_toggle_mute(): void;
+
+fn audio_init(): void {
+    sph_audio_init();
+}
+
+fn audio_shutdown(): void {
+    sph_audio_shutdown();
+}
+
+fn audio_play_jump(): void {
+    sph_audio_play_sfx(1);
+}
+
+fn audio_play_coin(): void {
+    sph_audio_play_sfx(2);
+}
+
+fn audio_play_stomp(): void {
+    sph_audio_play_sfx(3);
+}
+
+fn audio_play_hurt(): void {
+    sph_audio_play_sfx(4);
+}
+
+fn audio_play_spring(): void {
+    sph_audio_play_sfx(5);
+}
+
+fn audio_play_victory(): void {
+    sph_audio_play_sfx(6);
+}
+
+fn audio_play_laser(): void {
+    sph_audio_play_sfx(7);
+}
+
+fn audio_play_boss_hit(): void {
+    sph_audio_play_sfx(8);
+}
+
+fn audio_play_crumble(): void {
+    sph_audio_play_sfx(9);
+}
+
+fn audio_set_bgm(track_id: i32): void {
+    sph_audio_set_bgm(track_id);
+}
+
+fn audio_set_volume(vol: f32): void {
+    sph_audio_set_volume(vol);
+}
+
+fn audio_toggle_mute(): void {
+    sph_audio_toggle_mute();
+}

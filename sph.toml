@@ -1,0 +1,16 @@
+[project]
+name = "santient-engine"
+version = "1.0.0"
+entry = "src/main.sph"
+
+[compiler]
+language_version = "0.1"
+
+[target]
+triple = "x86_64-windows"
+
+[build]
+mode = "release"
+optimization = "2"
+subsystem = "windows"
+icon = "assets/icon.ico"

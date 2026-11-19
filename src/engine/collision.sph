@@ -1,0 +1,183 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Collision Detection & Resolution Engine
+// Tests: AABB Intersection, Tilemap Penetration Resolution, SIMD Batch Checks
+// ============================================================================
+
+import "types.sph";
+import "simd_math.sph";
+
+struct AABB {
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+}
+
+fn aabb_create(x: f32, y: f32, w: f32, h: f32): AABB {
+    return AABB {
+        min_x: x,
+        min_y: y,
+        max_x: x + w,
+        max_y: y + h,
+    };
+}
+
+fn aabb_intersects(a: AABB, b: AABB): bool {
+    if (a.max_x <= b.min_x || a.min_x >= b.max_x) {
+        return false;
+    }
+    if (a.max_y <= b.min_y || a.min_y >= b.max_y) {
+        return false;
+    }
+    return true;
+}
+
+fn point_in_aabb(px: f32, py: f32, box: AABB): bool {
+    return (px >= box.min_x && px <= box.max_x && py >= box.min_y && py <= box.max_y);
+}
+
+// SIMD 4-box boundary containment check using f32x4
+fn simd_check_4_boxes_in_bounds(b1: AABB, b2: AABB, b3: AABB, b4: AABB,
+                                 bounds_min: f32, bounds_max: f32): bool {
+    let min_x_vec = f32x4(b1.min_x, b2.min_x, b3.min_x, b4.min_x);
+    let max_x_vec = f32x4(b1.max_x, b2.max_x, b3.max_x, b4.max_x);
+    let lower = f32x4::splat(bounds_min);
+    let upper = f32x4::splat(bounds_max);
+
+    let clamped_min = min_x_vec.max(lower);
+    let clamped_max = max_x_vec.min(upper);
+
+    let diff1 = (min_x_vec - clamped_min).abs().sum();
+    let diff2 = (max_x_vec - clamped_max).abs().sum();
+
+    return (diff1 + diff2) < (0.001 as f32);
+}
+
+// Tile Collision Resolution Output
+struct CollisionResult {
+    resolved_x: f32,
+    resolved_y: f32,
+    hit_left: bool,
+    hit_right: bool,
+    hit_top: bool,
+    hit_ground: bool,
+}
+
+// Checks if tile ID is solid terrain (Grass=1, Dirt=2, Stone=3)
+fn tile_is_solid(tile_id: i32): bool {
+    return (tile_id == 1 || tile_id == 2 || tile_id == 3);
+}
+
+// Checks if tile ID is a deadly hazard (Spikes=5)
+fn tile_is_hazard(tile_id: i32): bool {
+    return (tile_id == 5);
+}
+
+// Checks if tile ID is a coin collectible (Coin=4)
+fn tile_is_coin(tile_id: i32): bool {
+    return (tile_id == 4);
+}
+
+// Checks if tile ID is a spring bounce pad (Spring=6)
+fn tile_is_spring(tile_id: i32): bool {
+    return (tile_id == 6);
+}
+
+// Checks if tile ID is a goal flag (Flag=7)
+fn tile_is_goal(tile_id: i32): bool {
+    return (tile_id == 7);
+}
+
+// Checks if tile ID is a crumbling block (Crumble=8)
+fn tile_is_crumble(tile_id: i32): bool {
+    return (tile_id == 8);
+}
+
+// Checks if tile ID is a checkpoint banner (Checkpoint=9)
+fn tile_is_checkpoint(tile_id: i32): bool {
+    return (tile_id == 9);
+}
+
+// ============================================================================
+// Spatial Hash Grid (64x64 pixel cells) for O(N) Collision Broadphase
+// ============================================================================
+
+extern "C" fn malloc(size: i64): *void;
+extern "C" fn free(ptr: *void): void;
+
+struct SpatialGrid {
+    cell_size: i32,
+    cols: i32,
+    rows: i32,
+    total_cells: i32,
+    counts_buf: *i32,
+    entries_buf: *i32,
+    max_per_cell: i32,
+}
+
+fn spatial_grid_create(world_w: i32, world_h: i32): SpatialGrid {
+    let cs: i32 = 64;
+    let cols: i32 = (world_w + cs - 1) / cs;
+    let rows: i32 = (world_h + cs - 1) / cs;
+    let total: i32 = cols * rows;
+    let max_per_cell: i32 = 16;
+    
+    unsafe {
+        let counts: *i32 = malloc((total * 4) as i64) as *i32;
+        let entries: *i32 = malloc((total * max_per_cell * 4) as i64) as *i32;
+        
+        return SpatialGrid {
+            cell_size: cs,
+            cols: cols,
+            rows: rows,
+            total_cells: total,
+            counts_buf: counts,
+            entries_buf: entries,
+            max_per_cell: max_per_cell,
+        };
+    }
+}
+
+fn spatial_grid_clear(grid: SpatialGrid): void {
+    unsafe {
+        mut i: i32 = 0;
+        while (i < grid.total_cells) {
+            let ptr = ((grid.counts_buf as i64) + ((i * 4) as i64)) as *i32;
+            *ptr = 0;
+            i = i + 1;
+        }
+    }
+}
+
+fn spatial_grid_insert(grid: SpatialGrid, entity_id: i32, box: AABB): void {
+    let min_c: i32 = (box.min_x as i32) / grid.cell_size;
+    let max_c: i32 = (box.max_x as i32) / grid.cell_size;
+    let min_r: i32 = (box.min_y as i32) / grid.cell_size;
+    let max_r: i32 = (box.max_y as i32) / grid.cell_size;
+
+    mut r: i32 = min_r;
+    while (r <= max_r) {
+        if (r >= 0 && r < grid.rows) {
+            mut c: i32 = min_c;
+            while (c <= max_c) {
+                if (c >= 0 && c < grid.cols) {
+                    let cell_idx: i32 = r * grid.cols + c;
+                    unsafe {
+                        let count_ptr = ((grid.counts_buf as i64) + ((cell_idx * 4) as i64)) as *i32;
+                        let count = *count_ptr;
+                        if (count < grid.max_per_cell) {
+                            let entry_offset = (cell_idx * grid.max_per_cell + count) * 4;
+                            let entry_ptr = ((grid.entries_buf as i64) + (entry_offset as i64)) as *i32;
+                            *entry_ptr = entity_id;
+                            *count_ptr = count + 1;
+                        }
+                    }
+                }
+                c = c + 1;
+            }
+        }
+        r = r + 1;
+    }
+}

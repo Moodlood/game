@@ -1,0 +1,81 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: 128-bit Hardware SIMD Vector Acceleration
+// Tests: f32x4, i32x4, SSE/AVX CPU feature detection, vector arithmetic & reductions
+// ============================================================================
+
+struct SimdCapabilities {
+    has_sse: bool,
+    has_sse2: bool,
+    has_sse3: bool,
+    has_avx: bool,
+}
+
+fn simd_detect_features(): SimdCapabilities {
+    let sse: bool = Simd::has_sse();
+    let sse2: bool = Simd::has_sse2();
+    let sse3: bool = Simd::has_sse3();
+    let avx: bool = Simd::has_avx();
+    return SimdCapabilities {
+        has_sse: sse,
+        has_sse2: sse2,
+        has_sse3: sse3,
+        has_avx: avx,
+    };
+}
+
+// SIMD 4-lane vector operations for physics integration
+// Evaluates positions: pos = pos + vel * dt
+fn simd_vec4_euler_step(pos: f32x4, vel: f32x4, dt: f32): f32x4 {
+    let dt_vec = f32x4::splat(dt);
+    let delta = vel * dt_vec;
+    return pos + delta;
+}
+
+// Computes 2D distance squared between two points using f32x4
+fn simd_dist_sq_2d(x1: f32, y1: f32, x2: f32, y2: f32): f32 {
+    let p1 = f32x4(x1, y1, 0.0 as f32, 0.0 as f32);
+    let p2 = f32x4(x2, y2, 0.0 as f32, 0.0 as f32);
+    let diff = p1 - p2;
+    return diff.dot(diff);
+}
+
+// Bounding box test against viewport bounds [left, top, right, bottom]
+// Returns true if all 4 bounds are within the view rect
+fn simd_bounds_inside_rect(box_min_x: f32, box_min_y: f32, box_max_x: f32, box_max_y: f32,
+                           view_min_x: f32, view_min_y: f32, view_max_x: f32, view_max_y: f32): bool {
+    let b = f32x4(box_min_x, box_min_y, box_max_x, box_max_y);
+    let v_min = f32x4(view_min_x, view_min_y, view_min_x, view_min_y);
+    let v_max = f32x4(view_max_x, view_max_y, view_max_x, view_max_y);
+
+    let clamped = b.min(v_max).max(v_min);
+    let diff = b - clamped;
+    let err = diff.abs().sum();
+    return err < (0.001 as f32);
+}
+
+// Color channel interpolation using f32x4 SIMD vector math
+fn simd_lerp_color_channels(c1_r: f32, c1_g: f32, c1_b: f32, c1_a: f32,
+                            c2_r: f32, c2_g: f32, c2_b: f32, c2_a: f32,
+                            t: f32): f32x4 {
+    let v1 = f32x4(c1_r, c1_g, c1_b, c1_a);
+    let v2 = f32x4(c2_r, c2_g, c2_b, c2_a);
+    let t_vec = f32x4::splat(t);
+    let inv_t = f32x4::splat(1.0 as f32 - t);
+    return (v1 * inv_t) + (v2 * t_vec);
+}
+
+// Computes 4-pixel radial light falloff attenuation using f32x4 SIMD
+fn simd_light_attenuation_4px(px_vec: f32x4, py: f32, lx: f32, ly: f32, radius: f32, intensity: f32): f32x4 {
+    let lx_vec = f32x4::splat(lx);
+    let ly_vec = f32x4::splat(ly);
+    let dx = px_vec - lx_vec;
+    let dy = f32x4::splat(py) - ly_vec;
+    let dist_sq = (dx * dx) + (dy * dy);
+    let rad_sq = radius * radius;
+    let inv_rad_sq = f32x4::splat(1.0 as f32 / rad_sq);
+    let normalized_dist = dist_sq * inv_rad_sq;
+    let raw_att = (f32x4::splat(1.0 as f32) - normalized_dist) * f32x4::splat(intensity);
+    return raw_att.max(f32x4::splat(0.0 as f32)).min(f32x4::splat(1.0 as f32));
+}

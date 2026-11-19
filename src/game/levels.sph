@@ -1,0 +1,632 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Level Data, Procedural Environments & Serialization
+// Tests: Memory Allocation, File I/O (sph_file_read/write), Level Serialization
+// ============================================================================
+
+import "../engine/types.sph";
+
+extern "C" fn sph_alloc(size: i64): *void;
+extern "C" fn sph_free(ptr: *void): void;
+extern "C" fn sph_file_exists(path: string): i32;
+extern "C" fn sph_file_read(path: string): string;
+extern "C" fn sph_file_write(path: string, content: string): i32;
+extern "C" fn sph_string_len(s: string): i64;
+extern "C" fn sph_string_slice(s: string, start: i64, len: i64): string;
+
+// Level grid specifications: 40 columns x 30 rows = 1200 tiles (640x480 screen at 16x16 tiles)
+fn level_cols(): i32 { return 40; }
+fn level_rows(): i32 { return 30; }
+fn level_total_tiles(): i32 { return 1200; }
+
+struct LevelMap {
+    cols: i32,
+    rows: i32,
+    tiles: *i32,
+}
+
+fn level_map_create(): LevelMap {
+    let byte_count: i64 = (1200 as i64) * (4 as i64);
+    let mem: *void = sph_alloc(byte_count);
+    unsafe {
+        let t: *i32 = mem as *i32;
+        let map = LevelMap {
+            cols: 40,
+            rows: 30,
+            tiles: t,
+        };
+        level_map_clear(map, 0);
+        return map;
+    }
+}
+
+fn level_map_destroy(map: LevelMap): void {
+    unsafe {
+        sph_free(map.tiles as *void);
+    }
+}
+
+fn level_map_set_tile(map: LevelMap, col: i32, row: i32, tile_id: i32): void {
+    if (col >= 0 && col < map.cols && row >= 0 && row < map.rows) {
+        unsafe {
+            let idx: i64 = ((row as i64) * (map.cols as i64)) + (col as i64);
+            let ptr: *i32 = ((map.tiles as i64) + (idx * (4 as i64))) as *i32;
+            *ptr = tile_id;
+        }
+    }
+}
+
+fn level_map_get_tile(map: LevelMap, col: i32, row: i32): i32 {
+    if (col >= 0 && col < map.cols && row >= 0 && row < map.rows) {
+        unsafe {
+            let idx: i64 = ((row as i64) * (map.cols as i64)) + (col as i64);
+            let ptr: *i32 = ((map.tiles as i64) + (idx * (4 as i64))) as *i32;
+            return *ptr;
+        }
+    }
+    return 0;
+}
+
+fn level_map_clear(map: LevelMap, tile_id: i32): void {
+    mut r: i32 = 0;
+    while (r < map.rows) {
+        mut c: i32 = 0;
+        while (c < map.cols) {
+            level_map_set_tile(map, c, r, tile_id);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Hand-Crafted Level 1: "Greenfield Meadows"
+// ----------------------------------------------------------------------------
+
+fn build_level_1(map: LevelMap): void {
+    level_map_clear(map, 0);
+
+    // Floor (rows 27..29)
+    mut c: i32 = 0;
+    while (c < 40) {
+        level_map_set_tile(map, c, 27, 1); // Grass top
+        level_map_set_tile(map, c, 28, 2); // Dirt
+        level_map_set_tile(map, c, 29, 2);
+        c = c + 1;
+    }
+
+    // Floating platforms
+    // Platform A
+    mut p: i32 = 6;
+    while (p <= 11) {
+        level_map_set_tile(map, p, 23, 1);
+        p = p + 1;
+    }
+
+    // Platform B (higher)
+    p = 15;
+    while (p <= 20) {
+        level_map_set_tile(map, p, 19, 1);
+        p = p + 1;
+    }
+
+    // Platform C
+    p = 24;
+    while (p <= 29) {
+        level_map_set_tile(map, p, 15, 1);
+        p = p + 1;
+    }
+
+    // Coins on platforms
+    level_map_set_tile(map, 7, 21, 4);
+    level_map_set_tile(map, 9, 21, 4);
+    level_map_set_tile(map, 16, 17, 4);
+    level_map_set_tile(map, 18, 17, 4);
+    level_map_set_tile(map, 25, 13, 4);
+    level_map_set_tile(map, 27, 13, 4);
+
+    // Coins near ground
+    level_map_set_tile(map, 13, 25, 4);
+    level_map_set_tile(map, 22, 25, 4);
+
+    // Goal Flag on final high platform
+    p = 33;
+    while (p <= 37) {
+        level_map_set_tile(map, p, 21, 3); // Stone platform
+        p = p + 1;
+    }
+    level_map_set_tile(map, 35, 20, 7); // Flag
+
+    // Spring pad on ground to help reach platform B
+    level_map_set_tile(map, 13, 26, 6);
+}
+
+// ----------------------------------------------------------------------------
+// Hand-Crafted Level 2: "Spikefall Cavern"
+// ----------------------------------------------------------------------------
+
+fn build_level_2(map: LevelMap): void {
+    level_map_clear(map, 0);
+
+    // Ground with dangerous spike pits
+    mut c: i32 = 0;
+    while (c < 40) {
+        // Spike pit in cols 10..15 and 22..27
+        if ((c >= 10 && c <= 14) || (c >= 22 && c <= 26)) {
+            level_map_set_tile(map, c, 28, 5); // Spikes!
+            level_map_set_tile(map, c, 29, 2);
+        } else {
+            level_map_set_tile(map, c, 27, 3); // Stone floor
+            level_map_set_tile(map, c, 28, 3);
+            level_map_set_tile(map, c, 29, 3);
+        }
+        c = c + 1;
+    }
+
+    // Stepping stones over pit 1 (with crumbling block surprise!)
+    level_map_set_tile(map, 11, 23, 3);
+    level_map_set_tile(map, 12, 23, 8); // Crumbling block!
+    level_map_set_tile(map, 13, 23, 3);
+
+    // Coins over pit 1
+    level_map_set_tile(map, 11, 21, 4);
+    level_map_set_tile(map, 13, 21, 4);
+
+    // High bridge over pit 2
+    mut p: i32 = 18;
+    while (p <= 30) {
+        if (p == 24 || p == 25) {
+            level_map_set_tile(map, p, 18, 8); // Crumbling bridge section!
+        } else {
+            level_map_set_tile(map, p, 18, 3);
+        }
+        p = p + 1;
+    }
+
+    // Mid-level Checkpoint Banner on bridge
+    level_map_set_tile(map, 19, 17, 9);
+
+    // Spring to jump onto high bridge
+    level_map_set_tile(map, 16, 26, 6);
+
+    // Coins on bridge
+    level_map_set_tile(map, 20, 16, 4);
+    level_map_set_tile(map, 24, 16, 4);
+    level_map_set_tile(map, 28, 16, 4);
+
+    // Goal Flag on far right cliff
+    p = 34;
+    while (p <= 39) {
+        level_map_set_tile(map, p, 24, 3);
+        p = p + 1;
+    }
+    level_map_set_tile(map, 37, 23, 7);
+}
+
+// ----------------------------------------------------------------------------
+// Hand-Crafted Level 3: "Castle of the Sky"
+// ----------------------------------------------------------------------------
+
+fn build_level_3(map: LevelMap): void {
+    level_map_clear(map, 0);
+
+    // Starting ground
+    mut c: i32 = 0;
+    while (c <= 8) {
+        level_map_set_tile(map, c, 27, 3);
+        level_map_set_tile(map, c, 28, 3);
+        level_map_set_tile(map, c, 29, 3);
+        c = c + 1;
+    }
+
+    // Super Spring at spawn
+    level_map_set_tile(map, 6, 26, 6);
+
+    // Ascending Tower 1 (rows 22, 17, 12)
+    mut p: i32 = 10;
+    while (p <= 14) { level_map_set_tile(map, p, 22, 3); p = p + 1; }
+    p = 15;
+    while (p <= 19) { level_map_set_tile(map, p, 17, 3); p = p + 1; }
+    p = 20;
+    while (p <= 24) { level_map_set_tile(map, p, 12, 3); p = p + 1; }
+
+    // Coins on towers
+    level_map_set_tile(map, 12, 20, 4);
+    level_map_set_tile(map, 17, 15, 4);
+    level_map_set_tile(map, 22, 10, 4);
+
+    // Tower 2 Spring to High Castle
+    level_map_set_tile(map, 23, 11, 6);
+
+    // Castle Roof (rows 7..8, cols 28..38)
+    p = 28;
+    while (p <= 38) {
+        level_map_set_tile(map, p, 8, 3);
+        p = p + 1;
+    }
+
+    // High sky coins
+    level_map_set_tile(map, 30, 6, 4);
+    level_map_set_tile(map, 32, 6, 4);
+    level_map_set_tile(map, 34, 6, 4);
+
+    // Royal Goal Flag
+    level_map_set_tile(map, 36, 7, 7);
+
+    // Bottom hazard spikes across the abyss
+    c = 9;
+    while (c < 40) {
+        level_map_set_tile(map, c, 29, 5);
+        c = c + 1;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Autonomous Procedural Level Generator (PCG) & Intelligent Level Architect
+// Guaranteed Reachability, Jump-Arc Constraints, Dynamic Biomes & Boss Arenas
+// ----------------------------------------------------------------------------
+
+struct LevelInfo {
+    title: string,
+    biome: i32,
+    has_lighting: bool,
+    bgm_track: i32,
+}
+
+fn pcg_get_level_title(level_idx: i32, seed: i32): string {
+    let cur_level_num: i32 = level_idx + 1;
+    let lvl_num: string = i32_to_string(cur_level_num);
+    let is_boss: bool = ((level_idx % 5) == 4);
+    let p_idx: i32 = (seed % 10);
+    mut pre: string = "EMERALD";
+    if (p_idx == 1) { pre = "SHADOW"; }
+    else if (p_idx == 2) { pre = "CRYSTAL"; }
+    else if (p_idx == 3) { pre = "OBSIDIAN"; }
+    else if (p_idx == 4) { pre = "SUNKEN"; }
+    else if (p_idx == 5) { pre = "CELESTIAL"; }
+    else if (p_idx == 6) { pre = "FORBIDDEN"; }
+    else if (p_idx == 7) { pre = "THUNDER"; }
+    else if (p_idx == 8) { pre = "NEON"; }
+    else if (p_idx == 9) { pre = "ANCIENT"; }
+
+    let s_idx: i32 = ((seed / 10) % 10);
+    mut suf: string = "VALLEY";
+    if (s_idx == 1) { suf = "CHASM"; }
+    else if (s_idx == 2) { suf = "SPIRE"; }
+    else if (s_idx == 3) { suf = "CITADEL"; }
+    else if (s_idx == 4) { suf = "DEPTHS"; }
+    else if (s_idx == 5) { suf = "RUINS"; }
+    else if (s_idx == 6) { suf = "SANCTUARY"; }
+    else if (s_idx == 7) { suf = "PEAKS"; }
+    else if (s_idx == 8) { suf = "LABYRINTH"; }
+    else if (s_idx == 9) { suf = "VAULT"; }
+
+    if (is_boss) {
+        return "LVL " + lvl_num + ": " + pre + " " + suf + " [BOSS ARENA]";
+    }
+    let seed_num: i32 = seed % 10000;
+    return "LVL " + lvl_num + ": " + pre + " " + suf + " [SEED #" + i32_to_string(seed_num) + "]";
+}
+
+fn build_boss_arena(map: LevelMap, level_idx: i32, seed: i32): LevelInfo {
+    level_map_clear(map, 0);
+
+    // Solid battle floor at row 27
+    mut c: i32 = 0;
+    while (c < 40) {
+        level_map_set_tile(map, c, 27, 3);
+        level_map_set_tile(map, c, 28, 3);
+        level_map_set_tile(map, c, 29, 3);
+        c = c + 1;
+    }
+
+    // Elevated battlements
+    mut p: i32 = 8;
+    while (p <= 14) { level_map_set_tile(map, p, 22, 3); p = p + 1; }
+    p = 17;
+    while (p <= 23) { level_map_set_tile(map, p, 16, 3); p = p + 1; }
+    p = 27;
+    while (p <= 36) { level_map_set_tile(map, p, 11, 3); p = p + 1; }
+
+    // Coins on high ledges
+    level_map_set_tile(map, 10, 20, 4);
+    level_map_set_tile(map, 20, 14, 4);
+    level_map_set_tile(map, 30, 9, 4);
+    level_map_set_tile(map, 32, 9, 4);
+
+    // Super springs to leap between battlements
+    level_map_set_tile(map, 6, 26, 6);
+    level_map_set_tile(map, 15, 26, 6);
+    level_map_set_tile(map, 24, 26, 6);
+
+    // Goal Flag on the highest throne
+    level_map_set_tile(map, 35, 10, 7);
+
+    // Checkpoint at entrance
+    level_map_set_tile(map, 3, 26, 9);
+
+    // Entity spawns:
+    level_map_set_tile(map, 11, 26, 10); // Slime 1
+    level_map_set_tile(map, 20, 26, 11); // Slime 2
+    level_map_set_tile(map, 15, 8, 12);  // Drone
+    level_map_set_tile(map, 28, 10, 13); // Turret
+    level_map_set_tile(map, 31, 7, 14);  // Boss
+
+    let t: string = pcg_get_level_title(level_idx, seed);
+    return LevelInfo {
+        title: t,
+        biome: 3,
+        has_lighting: true,
+        bgm_track: 4,
+    };
+}
+
+fn build_procedural_level(map: LevelMap, level_idx: i32): LevelInfo {
+    let seed_start: i32 = (1337 + level_idx * 7919) & 2147483647;
+    let is_boss: bool = ((level_idx % 5) == 4);
+
+    if (is_boss) {
+        return build_boss_arena(map, level_idx, seed_start);
+    }
+
+    mut seed: i32 = seed_start;
+    mut biome: i32 = (level_idx % 4);
+    mut main_tile: i32 = 1;
+    mut sub_tile: i32 = 2;
+    mut bgm_track: i32 = 1;
+    mut has_lighting: bool = false;
+
+    if (biome == 1) {
+        main_tile = 3;
+        sub_tile = 3;
+        bgm_track = 2;
+        has_lighting = true;
+    } else if (biome == 2) {
+        main_tile = 3;
+        sub_tile = 3;
+        bgm_track = 3;
+        has_lighting = false;
+    } else if (biome == 3) {
+        main_tile = 3;
+        sub_tile = 3;
+        bgm_track = 2;
+        has_lighting = true;
+    }
+
+    level_map_clear(map, 0);
+
+    // Starting ground
+    mut c: i32 = 0;
+    while (c <= 5) {
+        level_map_set_tile(map, c, 27, main_tile);
+        level_map_set_tile(map, c, 28, sub_tile);
+        level_map_set_tile(map, c, 29, sub_tile);
+        c = c + 1;
+    }
+
+    // Goal platform
+    let goal_row: i32 = 17 + (seed % 7);
+    c = 34;
+    while (c < 40) {
+        level_map_set_tile(map, c, goal_row, main_tile);
+        if (goal_row < 27) {
+            level_map_set_tile(map, c, goal_row + 1, sub_tile);
+        }
+        c = c + 1;
+    }
+    level_map_set_tile(map, 37, goal_row - 1, 7);
+
+    // Forward walk generation
+    mut cur_c: i32 = 5;
+    mut cur_r: i32 = 26;
+    mut plat_idx: i32 = 0;
+    mut chk_placed: bool = false;
+    mut e1_placed: bool = false;
+    mut e2_placed: bool = false;
+    mut plt_placed: bool = false;
+
+    while (cur_c < 33) {
+        seed = ((seed * 1664525) + 1013904223) & 2147483647;
+        let gap: i32 = 2 + (seed % 4);
+        let pw_raw: i32 = 3 + ((seed / 8) % 4);
+        let delta_r: i32 = ((seed / 64) % 7) - 3;
+        mut next_r: i32 = cur_r + delta_r;
+        if (next_r < 11) { next_r = 11; }
+        if (next_r > 26) { next_r = 26; }
+
+        let p_start: i32 = cur_c + gap;
+        mut p_end: i32 = p_start + pw_raw - 1;
+        if (p_end > 33) { p_end = 33; }
+        let pw: i32 = p_end - p_start + 1;
+
+        if (pw >= 2) {
+            mut pc: i32 = p_start;
+            while (pc <= p_end) {
+                mut t: i32 = main_tile;
+                if (biome == 1 && pc == (p_start + 1) && pw >= 4 && ((seed % 3) == 0)) {
+                    t = 8;
+                }
+                level_map_set_tile(map, pc, next_r, t);
+                if (biome == 0 && next_r < 27) {
+                    level_map_set_tile(map, pc, next_r + 1, sub_tile);
+                }
+                pc = pc + 1;
+            }
+
+            if ((cur_r - next_r) >= 3) {
+                level_map_set_tile(map, p_start, next_r, 6);
+            }
+
+            if (p_start + 1 < p_end) {
+                level_map_set_tile(map, p_start + 1, next_r - 1, 4);
+                if (pw >= 4) {
+                    level_map_set_tile(map, p_start + 2, next_r - 1, 4);
+                }
+            }
+
+            // Checkpoint Flag at mid-level
+            if (!chk_placed && p_start <= 22 && p_end >= 18) {
+                level_map_set_tile(map, p_start, next_r - 1, 9);
+                chk_placed = true;
+            }
+
+            // Slimes
+            if (!e1_placed && plat_idx == 0 && pw >= 4) {
+                level_map_set_tile(map, p_start + 1, next_r - 1, 10);
+                e1_placed = true;
+            } else if (!e2_placed && plat_idx >= 1 && pw >= 4) {
+                level_map_set_tile(map, p_start + 1, next_r - 1, 11);
+                e2_placed = true;
+            }
+
+            // Moving platform
+            if (!plt_placed && gap >= 4 && (biome == 1 || biome == 2)) {
+                level_map_set_tile(map, cur_c + 1, next_r, 15);
+                plt_placed = true;
+            }
+
+            mut hc: i32 = cur_c;
+            while (hc < p_start) {
+                level_map_set_tile(map, hc, 29, 5);
+                hc = hc + 1;
+            }
+
+            cur_c = p_end + 1;
+            cur_r = next_r;
+            plat_idx = plat_idx + 1;
+        } else {
+            cur_c = 34;
+        }
+    }
+
+    // Aerial drone & turret
+    if (biome == 1 || biome == 2) {
+        level_map_set_tile(map, 18, 8, 12);
+    }
+    if (biome == 2 || biome == 3) {
+        level_map_set_tile(map, 23, 10, 13);
+    }
+
+    let t: string = pcg_get_level_title(level_idx, seed_start);
+    return LevelInfo {
+        title: t,
+        biome: biome,
+        has_lighting: has_lighting,
+        bgm_track: bgm_track,
+    };
+}
+
+fn build_level(map: LevelMap, level_idx: i32): LevelInfo {
+    if (level_idx == 0) {
+        build_level_1(map);
+        level_map_set_tile(map, 9, 26, 10);
+        level_map_set_tile(map, 16, 26, 11);
+        level_map_set_tile(map, 11, 20, 15);
+        return LevelInfo {
+            title: "LVL 1: GREENFIELD MEADOWS",
+            biome: 0,
+            has_lighting: false,
+            bgm_track: 1,
+        };
+    } else if (level_idx == 1) {
+        build_level_2(map);
+        level_map_set_tile(map, 14, 17, 10);
+        level_map_set_tile(map, 20, 17, 11);
+        level_map_set_tile(map, 17, 9, 12);
+        return LevelInfo {
+            title: "LVL 2: SPIKEFALL CAVERN",
+            biome: 1,
+            has_lighting: true,
+            bgm_track: 2,
+        };
+    } else if (level_idx == 2) {
+        build_level_3(map);
+        level_map_set_tile(map, 11, 10, 12);
+        level_map_set_tile(map, 22, 11, 13);
+        level_map_set_tile(map, 16, 10, 15);
+        level_map_set_tile(map, 31, 6, 14);
+        return LevelInfo {
+            title: "LVL 3: CASTLE OF THE SKY",
+            biome: 2,
+            has_lighting: false,
+            bgm_track: 3,
+        };
+    }
+
+    return build_procedural_level(map, level_idx);
+}
+
+// ----------------------------------------------------------------------------
+// Level Disk Serialization (Save & Load to Text File)
+// ----------------------------------------------------------------------------
+
+fn level_save_to_disk(map: LevelMap, path: string): bool {
+    mut content: string = "";
+    mut r: i32 = 0;
+    while (r < map.rows) {
+        mut c: i32 = 0;
+        while (c < map.cols) {
+            let t: i32 = level_map_get_tile(map, c, r);
+            mut s: string = "0";
+            if (t == 1) { s = "1"; }
+            else if (t == 2) { s = "2"; }
+            else if (t == 3) { s = "3"; }
+            else if (t == 4) { s = "4"; }
+            else if (t == 5) { s = "5"; }
+            else if (t == 6) { s = "6"; }
+            else if (t == 7) { s = "7"; }
+            else if (t == 8) { s = "8"; }
+            else if (t == 9) { s = "9"; }
+            content = content + s;
+            c = c + 1;
+        }
+        content = content + "\n";
+        r = r + 1;
+    }
+    let res: i32 = sph_file_write(path, content);
+    return res != 0;
+}
+
+fn level_load_from_disk(map: LevelMap, path: string): bool {
+    let exists: i32 = sph_file_exists(path);
+    if (exists == 0) {
+        return false;
+    }
+    let content: string = sph_file_read(path);
+    let len: i64 = sph_string_len(content);
+    if (len == (0 as i64)) {
+        return false;
+    }
+
+    mut col: i32 = 0;
+    mut row: i32 = 0;
+    mut i: i64 = 0 as i64;
+
+    while (i < len && row < map.rows) {
+        let ch: string = sph_string_slice(content, i, 1 as i64);
+        if (ch == "\n" || ch == "\r") {
+            if (ch == "\n") {
+                row = row + 1;
+                col = 0;
+            }
+        } else {
+            if (col < map.cols) {
+                mut t: i32 = 0;
+                if (ch == "1") { t = 1; }
+                else if (ch == "2") { t = 2; }
+                else if (ch == "3") { t = 3; }
+                else if (ch == "4") { t = 4; }
+                else if (ch == "5") { t = 5; }
+                else if (ch == "6") { t = 6; }
+                else if (ch == "7") { t = 7; }
+                else if (ch == "8") { t = 8; }
+                else if (ch == "9") { t = 9; }
+                level_map_set_tile(map, col, row, t);
+                col = col + 1;
+            }
+        }
+        i = i + (1 as i64);
+    }
+    return true;
+}

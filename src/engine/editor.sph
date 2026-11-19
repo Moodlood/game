@@ -1,0 +1,251 @@
+<?php
+
+// ============================================================================
+// SantientPHP Game Engine: Interactive In-Engine Level Editor
+// Features: 4-Bit Auto-Tiling Bitmasking, Undo/Redo Stack, Entity Brushes, F5 Cursor Playtest
+// ============================================================================
+
+import "types.sph";
+import "canvas.sph";
+import "input.sph";
+import "collision.sph";
+import "../game/levels.sph";
+
+struct LevelEditor {
+    active_brush: i32,
+    hover_col: i32,
+    hover_row: i32,
+    status_message: string,
+    message_timer: f32,
+    request_playtest: bool,
+    playtest_x: f32,
+    playtest_y: f32,
+    // Undo / Redo history ring buffer (up to 64 steps)
+    undo_cols: *i32,
+    undo_rows: *i32,
+    undo_olds: *i32,
+    undo_news: *i32,
+    undo_count: i32,
+    redo_count: i32,
+}
+
+fn level_editor_create(): LevelEditor {
+    unsafe {
+        let u_cols: *i32 = malloc((64 * 4) as i64) as *i32;
+        let u_rows: *i32 = malloc((64 * 4) as i64) as *i32;
+        let u_olds: *i32 = malloc((64 * 4) as i64) as *i32;
+        let u_news: *i32 = malloc((64 * 4) as i64) as *i32;
+
+        return LevelEditor {
+            active_brush: 1, // Default Grass platform
+            hover_col: 0,
+            hover_row: 0,
+            status_message: "LEVEL EDITOR: [1-9] Brush | LMB Paint | RMB Erase | F5 Test | TAB Play",
+            message_timer: 5.0 as f32,
+            request_playtest: false,
+            playtest_x: 0.0 as f32,
+            playtest_y: 0.0 as f32,
+            undo_cols: u_cols,
+            undo_rows: u_rows,
+            undo_olds: u_olds,
+            undo_news: u_news,
+            undo_count: 0,
+            redo_count: 0,
+        };
+    }
+}
+
+fn brush_name(b: i32): string {
+    if (b == 1) { return "1:GRASS"; }
+    if (b == 2) { return "2:DIRT"; }
+    if (b == 3) { return "3:STONE"; }
+    if (b == 4) { return "4:COIN"; }
+    if (b == 5) { return "5:SPIKE"; }
+    if (b == 6) { return "6:SPRING"; }
+    if (b == 7) { return "7:FLAG"; }
+    if (b == 8) { return "8:SLIME"; }
+    if (b == 9) { return "9:DRONE"; }
+    return "0:ERASE";
+}
+
+fn brush_color(b: i32): i32 {
+    if (b == 1) { return color_grass_green(); }
+    if (b == 2) { return color_dirt_brown(); }
+    if (b == 3) { return color_stone_gray(); }
+    if (b == 4) { return color_coin_gold(); }
+    if (b == 5) { return color_spike_silver(); }
+    if (b == 6) { return color_spring_pink(); }
+    if (b == 7) { return color_yellow(); }
+    if (b == 8) { return color_magenta(); }
+    if (b == 9) { return color_cyan(); }
+    return color_dark_gray();
+}
+
+// 4-Bit Cardinal Neighbor Auto-Tiling Bitmask: North=1, East=2, South=4, West=8
+fn auto_tile_get_bitmask(map: LevelMap, col: i32, row: i32): i32 {
+    mut mask: i32 = 0;
+    if (row > 0 && tile_is_solid(level_map_get_tile(map, col, row - 1))) {
+        mask = mask | 1; // North
+    }
+    if (col < (map.cols - 1) && tile_is_solid(level_map_get_tile(map, col + 1, row))) {
+        mask = mask | 2; // East
+    }
+    if (row < (map.rows - 1) && tile_is_solid(level_map_get_tile(map, col, row + 1))) {
+        mask = mask | 4; // South
+    }
+    if (col > 0 && tile_is_solid(level_map_get_tile(map, col - 1, row))) {
+        mask = mask | 8; // West
+    }
+    return mask;
+}
+
+fn level_editor_push_undo(ed: LevelEditor, col: i32, row: i32, old_id: i32, new_id: i32): LevelEditor {
+    mut next_ed: LevelEditor = ed;
+    if (next_ed.undo_count < 64) {
+        unsafe {
+            let offset: i64 = (next_ed.undo_count as i64) * (4 as i64);
+            let p_c: *i32 = ((next_ed.undo_cols as i64) + offset) as *i32;
+            let p_r: *i32 = ((next_ed.undo_rows as i64) + offset) as *i32;
+            let p_o: *i32 = ((next_ed.undo_olds as i64) + offset) as *i32;
+            let p_n: *i32 = ((next_ed.undo_news as i64) + offset) as *i32;
+            *p_c = col;
+            *p_r = row;
+            *p_o = old_id;
+            *p_n = new_id;
+        }
+        next_ed.undo_count = next_ed.undo_count + 1;
+        next_ed.redo_count = 0; // Clear redo chain on new action
+    }
+    return next_ed;
+}
+
+fn level_editor_update(ed: LevelEditor, map: LevelMap, input: InputState, dt: f32): LevelEditor {
+    mut next_ed: LevelEditor = ed;
+    mut current_brush: i32 = next_ed.active_brush;
+    mut msg: string = next_ed.status_message;
+    mut msg_time: f32 = next_ed.message_timer - dt;
+    next_ed.request_playtest = false;
+
+    // Direct digit keys 1..9
+    if (input.digit_pressed >= 1 && input.digit_pressed <= 9) {
+        current_brush = input.digit_pressed;
+        msg = "BRUSH: " + brush_name(current_brush);
+        msg_time = 2.0 as f32;
+    }
+
+    // Grid coordinates
+    let col: i32 = input.mouse_x / 16;
+    let row: i32 = input.mouse_y / 16;
+    next_ed.hover_col = col;
+    next_ed.hover_row = row;
+
+    // F5: Playtest from Cursor
+    if (input.f5_pressed) {
+        if (col >= 0 && col < map.cols && row >= 0 && row < (map.rows - 2)) {
+            next_ed.request_playtest = true;
+            next_ed.playtest_x = (col * 16) as f32;
+            next_ed.playtest_y = (row * 16) as f32;
+            msg = "PLAYTESTING FROM CURSOR...";
+            msg_time = 2.0 as f32;
+        }
+    }
+
+    // Ctrl+Z (Undo)
+    if (input.ctrl_down && input.z_pressed && next_ed.undo_count > 0) {
+        let last_idx: i32 = next_ed.undo_count - 1;
+        unsafe {
+            let offset: i64 = (last_idx as i64) * (4 as i64);
+            let uc = *((next_ed.undo_cols as i64 + offset) as *i32);
+            let ur = *((next_ed.undo_rows as i64 + offset) as *i32);
+            let uo = *((next_ed.undo_olds as i64 + offset) as *i32);
+            level_map_set_tile(map, uc, ur, uo);
+        }
+        next_ed.undo_count = next_ed.undo_count - 1;
+        next_ed.redo_count = next_ed.redo_count + 1;
+        msg = "UNDO SUCCESSFUL";
+        msg_time = 1.5 as f32;
+    }
+
+    // Paint / Erase
+    if (col >= 0 && col < map.cols && row >= 0 && row < (map.rows - 2)) {
+        let cur_tile: i32 = level_map_get_tile(map, col, row);
+        if (input.mouse_lbutton_down && cur_tile != current_brush) {
+            next_ed = level_editor_push_undo(next_ed, col, row, cur_tile, current_brush);
+            level_map_set_tile(map, col, row, current_brush);
+        } else if (input.mouse_rbutton_down && cur_tile != 0) {
+            next_ed = level_editor_push_undo(next_ed, col, row, cur_tile, 0);
+            level_map_set_tile(map, col, row, 0);
+        }
+    }
+
+    // Save with 'S' key
+    if (input_is_raw_key_down(key_code_s()) && !input.ctrl_down) {
+        level_save_to_disk(map, "custom_level.dat");
+        msg = "SAVED: custom_level.dat";
+        msg_time = 3.0 as f32;
+    }
+
+    // Load with 'L' key
+    if (input_is_raw_key_down(76)) {
+        let ok: bool = level_load_from_disk(map, "custom_level.dat");
+        if (ok) {
+            msg = "LOADED: custom_level.dat";
+        } else {
+            msg = "NO custom_level.dat FOUND";
+        }
+        msg_time = 3.0 as f32;
+    }
+
+    next_ed.active_brush = current_brush;
+    next_ed.status_message = msg;
+    next_ed.message_timer = msg_time;
+    return next_ed;
+}
+
+fn level_editor_render(ce: CanvasEngine, ed: LevelEditor, map: LevelMap): void {
+    // 1. Grid overlay
+    let grid_color: i32 = color_to_u32(ColorRGBA { r: 50, g: 60, b: 75, a: 255 });
+    mut r: i32 = 0;
+    while (r < (map.rows - 2)) {
+        canvas_engine_draw_line(ce, 0, r * 16, ce.width, r * 16, grid_color);
+        r = r + 1;
+    }
+    mut c: i32 = 0;
+    while (c < map.cols) {
+        canvas_engine_draw_line(ce, c * 16, 0, c * 16, (map.rows - 2) * 16, grid_color);
+        c = c + 1;
+    }
+
+    // 2. Cursor hover highlight
+    if (ed.hover_col >= 0 && ed.hover_col < map.cols && ed.hover_row >= 0 && ed.hover_row < (map.rows - 2)) {
+        let hx: i32 = ed.hover_col * 16;
+        let hy: i32 = ed.hover_row * 16;
+        canvas_engine_draw_rect(ce, hx, hy, 16, 16, color_yellow());
+        canvas_engine_draw_rect(ce, hx + 1, hy + 1, 14, 14, color_white());
+    }
+
+    // 3. Editor Toolbar HUD
+    let bar_y: i32 = (map.rows - 2) * 16;
+    canvas_engine_fill_rect(ce, 0, bar_y, ce.width, 32, color_to_u32(ColorRGBA { r: 20, g: 25, b: 35, a: 255 }));
+    canvas_engine_draw_line(ce, 0, bar_y, ce.width, bar_y, color_cyan());
+
+    // Active brush preview
+    canvas_engine_fill_rect(ce, 8, bar_y + 8, 16, 16, brush_color(ed.active_brush));
+    canvas_engine_draw_rect(ce, 8, bar_y + 8, 16, 16, color_white());
+
+    // Info labels
+    canvas_engine_draw_text(ce, 30, bar_y + 6, brush_name(ed.active_brush), color_yellow(), 1);
+    canvas_engine_draw_text(ce, 30, bar_y + 18, ed.status_message, color_white(), 1);
+
+    // Quick palette buttons (1..9)
+    mut b: i32 = 1;
+    while (b <= 9) {
+        let bx: i32 = 440 + (b - 1) * 20;
+        let by: i32 = bar_y + 8;
+        canvas_engine_fill_rect(ce, bx, by, 16, 16, brush_color(b));
+        if (b == ed.active_brush) {
+            canvas_engine_draw_rect(ce, bx - 1, by - 1, 18, 18, color_yellow());
+        }
+        b = b + 1;
+    }
+}
